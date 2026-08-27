@@ -1,4 +1,5 @@
 import multer from "multer";
+import { DOCX_MIME_TYPE } from "../services/docxService.js";
 
 const ALLOWED_MIME_TYPES = new Set([
   "application/pdf",
@@ -8,6 +9,8 @@ const ALLOWED_MIME_TYPES = new Set([
   "image/heic",
   "image/heif",
   "text/plain",
+  "application/msword",
+  DOCX_MIME_TYPE,
 ]);
 
 const upload = multer({

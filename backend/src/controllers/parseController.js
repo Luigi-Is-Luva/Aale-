@@ -34,7 +34,11 @@ function validate(semester) {
 export async function parseSyllabi(req, res, next) {
   try {
     if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: "No files received. Attach one or more as form field 'files'." });
+      return res.status(400).json({
+        code: "INVALID_DOCUMENT",
+        title: "We couldn't read this syllabus.",
+        message: "Try another PDF or make sure the file contains readable syllabus content.",
+      });
     }
 
     const semesterStart = req.body.semesterStart || "2026-08-24";

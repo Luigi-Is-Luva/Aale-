@@ -1,11 +1,17 @@
 import { ai, MODEL } from "../config/gemini.js";
 import { syllabusBreakdownSchema, studyPlanSchema, semesterSchema } from "../utils/schemas.js";
 import { EXTRACTION_PROMPT, buildStudyPlanPrompt, buildParsePrompt } from "../utils/prompts.js";
+import { convertDocxToPdf, DOCX_MIME_TYPE } from "./docxService.js";
 
-function toContentPart(file) {
-  return file.mimetype === "text/plain"
-    ? { text: file.buffer.toString("utf-8") }
-    : { inlineData: { mimeType: file.mimetype, data: file.buffer.toString("base64") } };
+async function toContentPart(file) {
+  if (file.mimetype === "text/plain") {
+    return { text: file.buffer.toString("utf-8") };
+  }
+  if (file.mimetype === DOCX_MIME_TYPE) {
+    const pdfBuffer = await convertDocxToPdf(file.buffer);
+    return { inlineData: { mimeType: "application/pdf", data: pdfBuffer.toString("base64") } };
+  }
+  return { inlineData: { mimeType: file.mimetype, data: file.buffer.toString("base64") } };
 }
 
 function parseJsonResponse(response) {
@@ -15,12 +21,7 @@ function parseJsonResponse(response) {
 }
 
 export async function extractSyllabusBreakdown(fileBuffer, mimeType) {
-  // Pasted text arrives as a text/plain "file" from the frontend; send it as a
-  // text part instead of base64 inline data so Gemini reads it directly.
-  const contentPart =
-    mimeType === "text/plain"
-      ? { text: fileBuffer.toString("utf-8") }
-      : { inlineData: { mimeType, data: fileBuffer.toString("base64") } };
+  const contentPart = await toContentPart({ buffer: fileBuffer, mimetype: mimeType });
 
   const response = await ai.models.generateContent({
     model: MODEL,
@@ -41,7 +42,7 @@ export async function extractSyllabusBreakdown(fileBuffer, mimeType) {
 
 export async function parseSemester(files, semesterStart) {
   const today = new Date().toISOString().slice(0, 10);
-  const parts = files.map(toContentPart);
+  const parts = await Promise.all(files.map(toContentPart));
 
   const response = await ai.models.generateContent({
     model: MODEL,

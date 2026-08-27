@@ -3,9 +3,9 @@
 Express + Gemini backend. Two things live here:
 
 1. **`POST /api/parse`** — the endpoint the live MTA React app (`frontend/src/CourseCanvas.jsx`) actually
-   calls. Implements the contract in `api/parse-route.ts` (the team's original reference), extended with
-   `estimatedHours` per assessment (the study-plan scheduler needs a prep-time estimate) and
-   `topicDefinitions` per topic (real flashcard answers instead of a placeholder string).
+   calls. Implements the contract in `api/parse-route.ts` (the team's original reference), expanded with
+   instructor contact, structured meetings, detailed dates, grading scale, categorized policies, materials,
+   links, weekly schedule, `estimatedHours`, and `topicDefinitions`.
 2. **`/api/syllabus/*`** — a separate, self-contained onboarding flow (upload → breakdown → review →
    study plan) built earlier for a simpler UI. Not used by the current MTA frontend, kept here since it
    works and may be useful later.
@@ -26,29 +26,58 @@ Server runs on `http://localhost:8080` (override with `PORT`).
 ```
 POST /api/parse
 Content-Type: multipart/form-data
-  field "files": one or more PDF/image/text syllabi (repeat the field per file)
+  field "files": one or more PDF/image/text/.docx syllabi (repeat the field per file)
   field "semesterStart": ISO date, e.g. "2026-08-24"
 ```
 
-Gemini reads every file together in one context window and returns:
+`.docx` files are converted to a real PDF before being sent to Gemini (`src/services/docxService.js`:
+`mammoth` renders the docx's actual structure — headings, tables, lists — to HTML, then a headless Chrome
+(`puppeteer`) prints that to PDF, so grading tables and layout survive rather than being flattened to plain
+text). Legacy binary `.doc` files are accepted by the upload filter but not converted — they're passed
+through as-is, which Gemini generally can't read; ask users to save as `.docx` or PDF instead.
+
+Gemini reads every file together in one context window and returns one comprehensive structured result:
 ```json
 {
   "courses": [{
-    "code": "CSCI 335", "title": "...", "instructor": "...", "meetingTimes": "MW 10:00-11:50am",
-    "room": "...", "gradingPolicy": [{ "category": "Projects", "weightPercent": 35, "dropsLowest": false }],
-    "latePolicy": "...", "attendancePolicy": "...",
+    "code": "CSCI 335",
+    "title": "...",
+    "section": "A",
+    "semester": "Fall",
+    "year": 2026,
+    "instructor": "...",
+    "instructorContact": { "name": "...", "email": "...", "office": "...", "officeHoursText": "..." },
+    "meetings": [{ "type": "Lecture", "days": ["Monday", "Wednesday"], "startTime": "14:00", "endTime": "15:15", "location": "NAC 1/203" }],
+    "gradingPolicy": [{ "category": "Projects", "weightPercent": 35, "dropsLowest": false }],
+    "gradeScale": [{ "letter": "A", "min": 93, "max": 100 }],
+    "policies": [{ "category": "Late Work", "summary": "..." }],
+    "materials": [{ "type": "Textbook", "name": "...", "details": "..." }],
+    "links": [{ "label": "Blackboard", "url": "https://..." }],
+    "weeklySchedule": [{ "week": 1, "dateRange": "Aug 26-Sep 1", "topics": ["..."], "readings": ["..."], "assignments": ["..."] }],
     "topics": ["Red-black trees", "..."],
     "topicDefinitions": [{ "topic": "Red-black trees", "definition": "..." }]
   }],
   "assessments": [{
     "id": "csci335-midterm-1", "courseCode": "CSCI 335", "title": "Midterm 1", "type": "exam",
-    "dueDate": "2026-10-14", "dateConfidence": "explicit", "weightPercent": 19, "estimatedHours": 10
+    "dueDate": "2026-10-14", "originalDateText": "Wednesday, October 14",
+    "dateConfidence": "explicit", "weightPercent": 19, "estimatedHours": 10
   }],
   "warnings": ["CSCI 335: grading policy sums to 97%, not 100%. Check the syllabus."]
 }
 ```
 `warnings` flags what Gemini is unsure about (grading that doesn't sum to 100, TBA/inferred dates, orphan
 assessments) rather than silently guessing — surfaced in the app's "What Gemini extracted" panel.
+
+Quota/rate-limit errors are normalized before they reach the frontend:
+```json
+{
+  "code": "GEMINI_RATE_LIMITED",
+  "title": "Service Delay",
+  "message": "Gemini has temporarily reached its request limit.",
+  "retryAfter": "52s"
+}
+```
+The frontend preserves the selected files and does not auto-retry in a loop.
 
 ## `/api/syllabus/*` (standalone onboarding flow, not currently wired to the MTA frontend)
 

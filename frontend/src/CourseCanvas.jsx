@@ -7,9 +7,9 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
    Design thesis: the semester as a transit diagram. Courses are lines,
    assessments are stations, collision weeks are service advisories.
 
-   HACKATHON NOTE: every Gemini call in this prototype is stubbed behind
-   `askGemini()` at the bottom of this file. Swap that one function for a
-   fetch to your /api/parse route and the whole app becomes real.
+   Gemini calls go through `askGemini()` at the bottom of this file. The
+   frontend parses once, stores the structured result, and reuses it across
+   Canvas, Courses, Planner, and Study tools.
    ========================================================================== */
 
 /* ----------------------------- design tokens ----------------------------- */
@@ -62,14 +62,17 @@ const CSS = `
   font-size:13px; color:var(--ink); letter-spacing:-.04em; }
 .nav-name { font-family:'Archivo','Helvetica Neue',Arial,sans-serif; font-weight:800; font-size:14px;
   letter-spacing:-.01em; line-height:1.05; }
-.nav-group { display:flex; flex-direction:column; gap:2px; }
+.nav-group { display:flex; flex-direction:column; gap:2px; position:relative; padding-left:8px; }
+.nav-group::before { content:""; position:absolute; left:14px; top:27px; bottom:8px; width:3px;
+  background:linear-gradient(var(--signal), #1B54B8); border-radius:3px; opacity:.55; }
 .nav-label { font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; letter-spacing:.2em;
   text-transform:uppercase; color:#7E7C8E; margin:0 0 8px 8px; }
-.nav-item { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:5px;
+.nav-item { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:999px;
   font-size:14px; font-weight:500; color:#C9C5BC; text-align:left; width:100%; transition:.14s; }
 .nav-item:hover { background:var(--ink2); color:var(--bone); }
 .nav-item[data-on="1"] { background:var(--bone); color:var(--ink); font-weight:700; }
-.nav-tick { width:3px; height:15px; border-radius:2px; background:currentColor; opacity:.35; }
+.nav-tick { width:13px; height:13px; border-radius:50%; border:2px solid currentColor; background:var(--ink); opacity:1; z-index:1; }
+.nav-item[data-on="1"] .nav-tick { background:var(--signal); border-color:var(--ink); }
 .nav-foot { margin-top:auto; border-top:1px solid var(--ink3); padding-top:14px; }
 
 .main { flex:1; min-width:0; max-width:1480px; padding:30px clamp(18px,3.4vw,44px) 70px; }
@@ -117,6 +120,10 @@ const CSS = `
 .station { position:absolute; top:50%; transform:translate(-50%,-50%); z-index:4;
   border-radius:50%; border:2.5px solid var(--ink); background:#fff; transition:.14s; }
 .station:hover, .station[data-on="1"] { transform:translate(-50%,-50%) scale(1.32); border-color:var(--signal); }
+.station[data-type="exam"], .station[data-type="presentation"] { border-radius:3px; }
+.station[data-type="project"], .station[data-type="paper"] { border-radius:35% 35% 50% 50%; }
+.station::after { content:attr(data-label); position:absolute; top:calc(100% + 5px); left:50%; transform:translateX(-50%);
+  font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace; font-size:8px; color:#C9C5BC; white-space:nowrap; }
 .advisory { position:absolute; top:0; bottom:0; z-index:1; border-left:1px dashed rgba(228,87,46,.55);
   border-right:1px dashed rgba(228,87,46,.55);
   background:repeating-linear-gradient(-45deg, rgba(228,87,46,.14) 0 6px, transparent 6px 12px); }
@@ -141,6 +148,16 @@ const CSS = `
   border-radius:6px; padding:14px; }
 .status-tile strong { display:block; font-family:'Archivo','Helvetica Neue',Arial,sans-serif;
   font-size:18px; line-height:1.05; margin:5px 0; }
+.next-stop { background:linear-gradient(135deg, var(--ink), var(--ink2)); color:var(--bone);
+  border-radius:10px; padding:20px; border-left:6px solid var(--signal); }
+.station-tabs { display:flex; align-items:center; gap:0; overflow-x:auto; padding:4px 2px 16px; }
+.station-tab { position:relative; display:flex; align-items:center; gap:8px; padding:8px 16px 8px 0;
+  white-space:nowrap; font-weight:700; font-size:13px; color:var(--muted); }
+.station-tab:not(:last-child)::after { content:""; width:34px; height:3px; background:var(--bone3); margin-left:8px; border-radius:3px; }
+.station-dot { width:16px; height:16px; border-radius:50%; border:2px solid currentColor; background:#fff; flex:0 0 auto; }
+.station-tab[data-on="1"] { color:var(--ink); }
+.station-tab[data-on="1"] .station-dot { background:var(--signal); border-color:var(--ink); }
+.route-card { border-left:5px solid var(--line, var(--ink)); }
 
 /* availability painter */
 .avail { display:grid; grid-template-columns:56px repeat(7,1fr); gap:2px; min-width:600px; }
@@ -181,8 +198,12 @@ const CSS = `
   .nav { width:100%; flex:none; flex-direction:row; align-items:center; gap:14px;
     overflow-x:auto; padding:12px 14px; }
   .nav-group { flex-direction:row; }
+  .nav-group::before { display:none; }
   .nav-label, .nav-foot { display:none; }
   .nav-item { white-space:nowrap; }
+  .main { padding:22px 14px 50px; }
+  .station-tabs { padding-bottom:12px; }
+  .station-tab:not(:last-child)::after { width:18px; }
 }
 `;
 
@@ -193,141 +214,12 @@ const CSS = `
 const SEMESTER_START = new Date(2026, 7, 24); // Mon Aug 24 2026
 const WEEKS = 16; // 15 instruction weeks + finals
 
-const DEMO_COURSES = [
-  {
-    code: "CSCI 33500", short: "335", title: "Software Analysis & Design III",
-    instructor: "Prof. Adeyemi", color: "#D6352B",
-    meets: [{ d: 1, s: 10, e: 12 }, { d: 3, s: 10, e: 12 }],
-    room: "Hunter North 1001B",
-    late: "10% off per day, no submissions after 72 hours.",
-    attendance: "Two unexcused absences allowed. Third drops you a letter grade.",
-    grading: [
-      { cat: "Projects", w: 35, drops: false },
-      { cat: "Midterms", w: 40, drops: true },
-      { cat: "Final exam", w: 25, drops: false },
-    ],
-    topics: ["Amortized analysis", "Red-black trees", "Hash collision strategies",
-             "Graph traversal", "Dynamic programming", "Big-O vs Big-Theta"],
-  },
-  {
-    code: "CSCI 26000", short: "260", title: "Computer Architecture",
-    instructor: "Prof. Nakamura", color: "#1B54B8",
-    meets: [{ d: 2, s: 13, e: 15 }, { d: 4, s: 13, e: 15 }],
-    room: "Hunter West 615",
-    late: "No late labs. Ever. One drop granted at semester's end.",
-    attendance: "Lab attendance is graded. Lecture is not.",
-    grading: [
-      { cat: "Labs", w: 30, drops: true },
-      { cat: "Midterm", w: 25, drops: false },
-      { cat: "Lab practical", w: 15, drops: false },
-      { cat: "Final exam", w: 30, drops: false },
-    ],
-    topics: ["Pipelining hazards", "Cache associativity", "Two's complement",
-             "MIPS addressing modes", "Amdahl's Law", "Branch prediction"],
-  },
-  {
-    code: "ECO 20100", short: "201", title: "Intermediate Microeconomics",
-    instructor: "Prof. Okonkwo", color: "#E07316",
-    meets: [{ d: 1, s: 14, e: 15 }, { d: 3, s: 14, e: 15 }, { d: 5, s: 14, e: 15 }],
-    room: "Hunter East 714",
-    late: "Problem sets accepted up to 24 hours late for half credit.",
-    attendance: "Not tracked, but exam questions come from lecture only.",
-    grading: [
-      { cat: "Problem sets", w: 20, drops: true },
-      { cat: "Midterm 1", w: 20, drops: false },
-      { cat: "Midterm 2", w: 20, drops: false },
-      { cat: "Final exam", w: 40, drops: false },
-    ],
-    topics: ["Marginal rate of substitution", "Deadweight loss", "Nash equilibrium",
-             "Price elasticity", "Consumer surplus", "Isoquants and returns to scale"],
-  },
-  {
-    code: "MATH 15000", short: "150", title: "Discrete Structures",
-    instructor: "Prof. Vasquez", color: "#16904A",
-    meets: [{ d: 2, s: 9, e: 10 }, { d: 4, s: 9, e: 10 }],
-    room: "Hunter North 424",
-    late: "Homework is due at 11:59pm. Gradescope closes. No exceptions.",
-    attendance: "Optional, but quizzes are given in person without warning.",
-    grading: [
-      { cat: "Homework", w: 25, drops: true },
-      { cat: "Pop quizzes", w: 10, drops: true },
-      { cat: "Midterm", w: 25, drops: false },
-      { cat: "Final exam", w: 40, drops: false },
-    ],
-    topics: ["Proof by induction", "Pigeonhole principle", "Equivalence relations",
-             "Generating functions", "Graph coloring", "Recurrence relations"],
-  },
-  {
-    code: "ENGL 22000", short: "220", title: "Writing About Literature",
-    instructor: "Prof. Hollis", color: "#8E3FA6",
-    meets: [{ d: 5, s: 10, e: 13 }],
-    room: "Hunter West 222",
-    late: "Half a letter grade per day. Extensions granted if asked 48h ahead.",
-    attendance: "Seminar. Three absences and you cannot pass.",
-    grading: [
-      { cat: "Essays", w: 60, drops: false },
-      { cat: "Seminar participation", w: 20, drops: false },
-      { cat: "Final portfolio", w: 20, drops: false },
-    ],
-    topics: ["Close reading", "Thesis architecture", "Free indirect discourse",
-             "Citation ethics", "Counterargument framing", "Revision as re-seeing"],
-  },
-];
+// Live data the app actually renders. It starts empty on purpose: no academic
+// screens use fake courses, fake dates, or backup mock schedules.
+let COURSES = [];
+let ASSESSMENTS = [];
 
-// dueDate ISO, weightPercent, confidence: explicit | inferred | unknown
-const DEMO_ASSESSMENTS = [
-  // CSCI 33500
-  { id: "a0",  course: "CSCI 33500", title: "Warm-up lab — linked lists", type: "homework", date: "2026-09-03", w: 4, conf: "explicit", hours: 3 },
-  { id: "a1",  course: "CSCI 33500", title: "Project 1 — BST implementation", type: "project", date: "2026-09-18", w: 12, conf: "explicit", hours: 8 },
-  { id: "a2",  course: "CSCI 33500", title: "Midterm 1", type: "exam", date: "2026-10-14", w: 19, conf: "explicit", hours: 10 },
-  { id: "a3",  course: "CSCI 33500", title: "Project 2 — graph library", type: "project", date: "2026-10-30", w: 12, conf: "explicit", hours: 9 },
-  { id: "a4",  course: "CSCI 33500", title: "Midterm 2", type: "exam", date: "2026-11-11", w: 19, conf: "explicit", hours: 10 },
-  { id: "a6",  course: "CSCI 33500", title: "Project 3 — topic TBA", type: "project", date: null, w: 9, conf: "unknown", hours: 8 },
-  { id: "a5",  course: "CSCI 33500", title: "Final exam", type: "exam", date: "2026-12-09", w: 25, conf: "inferred", hours: 14 },
-  // CSCI 26000
-  { id: "b0",  course: "CSCI 26000", title: "Lab 1 — bit manipulation", type: "homework", date: "2026-09-04", w: 6, conf: "explicit", hours: 4 },
-  { id: "b1",  course: "CSCI 26000", title: "Lab 3 — datapath simulation", type: "homework", date: "2026-10-01", w: 8, conf: "explicit", hours: 5 },
-  { id: "b2",  course: "CSCI 26000", title: "Midterm", type: "exam", date: "2026-10-15", w: 25, conf: "explicit", hours: 11 },
-  { id: "b3",  course: "CSCI 26000", title: "Lab 6 — cache profiling", type: "homework", date: "2026-11-05", w: 8, conf: "explicit", hours: 5 },
-  { id: "b4",  course: "CSCI 26000", title: "Lab practical", type: "exam", date: "2026-11-12", w: 15, conf: "explicit", hours: 8 },
-  { id: "b6",  course: "CSCI 26000", title: "Lab 8 — pipeline hazards", type: "homework", date: "2026-11-24", w: 8, conf: "explicit", hours: 5 },
-  { id: "b5",  course: "CSCI 26000", title: "Final exam", type: "exam", date: "2026-12-11", w: 30, conf: "inferred", hours: 14 },
-  // ECO 20100
-  { id: "c0",  course: "ECO 20100", title: "Problem set 1", type: "homework", date: "2026-09-08", w: 5, conf: "explicit", hours: 4 },
-  { id: "c1",  course: "ECO 20100", title: "Problem set 2", type: "homework", date: "2026-09-25", w: 5, conf: "explicit", hours: 4 },
-  { id: "c2",  course: "ECO 20100", title: "Midterm 1", type: "exam", date: "2026-10-12", w: 20, conf: "explicit", hours: 10 },
-  { id: "c3",  course: "ECO 20100", title: "Problem set 5", type: "homework", date: "2026-11-06", w: 5, conf: "explicit", hours: 4 },
-  { id: "c4",  course: "ECO 20100", title: "Midterm 2", type: "exam", date: "2026-11-13", w: 20, conf: "explicit", hours: 10 },
-  { id: "c6",  course: "ECO 20100", title: "Problem set 7", type: "homework", date: "2026-11-20", w: 5, conf: "explicit", hours: 4 },
-  { id: "c5",  course: "ECO 20100", title: "Final exam", type: "exam", date: "2026-12-08", w: 40, conf: "inferred", hours: 16 },
-  // MATH 15000
-  { id: "d0",  course: "MATH 15000", title: "Homework 1 — propositional logic", type: "homework", date: "2026-09-03", w: 5, conf: "explicit", hours: 3 },
-  { id: "d1",  course: "MATH 15000", title: "Induction problem set", type: "homework", date: "2026-09-17", w: 6, conf: "explicit", hours: 4 },
-  { id: "d2",  course: "MATH 15000", title: "Midterm", type: "exam", date: "2026-10-15", w: 25, conf: "explicit", hours: 11 },
-  { id: "d5",  course: "MATH 15000", title: "Pop quizzes (unannounced)", type: "quiz", date: null, w: 10, conf: "unknown", hours: 5 },
-  { id: "d3",  course: "MATH 15000", title: "Graph theory problem set", type: "homework", date: "2026-11-12", w: 7, conf: "explicit", hours: 5 },
-  { id: "d6",  course: "MATH 15000", title: "Homework 9 — recurrences", type: "homework", date: "2026-11-24", w: 7, conf: "explicit", hours: 4 },
-  { id: "d4",  course: "MATH 15000", title: "Final exam", type: "exam", date: "2026-12-10", w: 40, conf: "inferred", hours: 15 },
-  // ENGL 22000
-  { id: "e0",  course: "ENGL 22000", title: "Reading response 1", type: "paper", date: "2026-09-11", w: 5, conf: "explicit", hours: 3 },
-  { id: "e1",  course: "ENGL 22000", title: "Essay 1 — close reading", type: "paper", date: "2026-09-25", w: 18, conf: "explicit", hours: 7 },
-  { id: "e2",  course: "ENGL 22000", title: "Essay 2 — comparative", type: "paper", date: "2026-10-30", w: 18, conf: "explicit", hours: 8 },
-  { id: "e3",  course: "ENGL 22000", title: "Essay 3 — research", type: "paper", date: "2026-11-13", w: 19, conf: "explicit", hours: 10 },
-  { id: "e5",  course: "ENGL 22000", title: "Seminar participation", type: "other", date: null, w: 20, conf: "unknown", hours: 0 },
-  { id: "e4",  course: "ENGL 22000", title: "Final portfolio", type: "paper", date: "2026-12-04", w: 20, conf: "explicit", hours: 9 },
-];
-
-// Live data the app actually renders. Starts as the demo semester; a real
-// upload in <Upload> reassigns these, and dataVersion (in <CourseCanvas>)
-// forces everything downstream to re-derive from the new values.
-let COURSES = DEMO_COURSES;
-let ASSESSMENTS = DEMO_ASSESSMENTS;
-
-const DEFAULT_CONSTRAINTS = [
-  { id: "k1", label: "Shift at the bookstore", days: [2, 4], s: 16, e: 21, kind: "work" },
-  { id: "k2", label: "Commute — 7 train", days: [1, 2, 3, 4, 5], s: 8, e: 9, kind: "commute" },
-  { id: "k3", label: "Intramural volleyball", days: [3], s: 19, e: 21, kind: "sport" },
-];
+const DEFAULT_CONSTRAINTS = [];
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const HOURS = Array.from({ length: 15 }, (_, i) => i + 8); // 8:00 → 22:00
@@ -350,6 +242,30 @@ const weekStart = (n) => addDays(SEMESTER_START, (n - 1) * 7);
 const courseBy = (code) => COURSES.find((c) => c.code === code);
 
 const TYPE_GLYPH = { exam: "EXAM", project: "PROJ", paper: "PAPER", homework: "HW", quiz: "QUIZ" };
+
+function mergeBy(items, keyFn) {
+  return Array.from(new Map(items.map((item) => [keyFn(item), item])).values());
+}
+
+function saveSemesterState() {
+  try {
+    sessionStorage.setItem("course-canvas-semester", JSON.stringify({ courses: COURSES, assessments: ASSESSMENTS }));
+  } catch { /* session storage may be blocked; parsing still works */ }
+}
+
+function loadSemesterState() {
+  try {
+    const raw = sessionStorage.getItem("course-canvas-semester");
+    if (!raw) return false;
+    const saved = JSON.parse(raw);
+    if (!Array.isArray(saved.courses) || !Array.isArray(saved.assessments)) return false;
+    COURSES = saved.courses;
+    ASSESSMENTS = saved.assessments;
+    return COURSES.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 /* Collision detection — plain TypeScript, no AI needed. This is the insight
    that no single syllabus can give you. */
@@ -496,6 +412,15 @@ function Empty({ title, body, action }) {
   );
 }
 
+function Info({ label, value }) {
+  return (
+    <div className="card-flat">
+      <div className="eyebrow">{label}</div>
+      <p style={{ fontSize: 14, margin: "7px 0 0", lineHeight: 1.45 }}>{value || "Not found in syllabus"}</p>
+    </div>
+  );
+}
+
 /* ------------------------------- 1. LOGIN ---------------------------------- */
 
 function Login({ onEnter }) {
@@ -515,31 +440,32 @@ function Login({ onEnter }) {
             Five syllabi.<br />One semester.<br /><span style={{ color: "var(--signal)" }}>One view.</span>
           </h1>
           <p className="lede" style={{ color: "#A9A6B4" }}>
-            Your syllabi each know one course. None of them know that October 14th
-            is the week four of them collide. Upload all of them and see the semester
-            the way it will actually happen to you.
+            Your syllabi each know one course. None of them know when all your
+            assignments, exams, class blocks, and free time collide. Upload the files
+            and see the semester the way it will actually happen to you.
           </p>
 
           {/* mini rail — the signature element, previewed */}
           <div style={{ marginTop: 40 }}>
-            {COURSES.map((c, i) => (
-              <div key={c.code} className="anim-up" style={{ display: "flex", alignItems: "center",
+            {["Syllabus upload", "Calendar blocks", "Study route", "Flashcards"].map((label, i) => (
+              <div key={label} className="anim-up" style={{ display: "flex", alignItems: "center",
                    height: 30, animationDelay: `${i * 90}ms` }}>
-                <Bullet course={c} size="sm" />
+                <span className="nav-tick" style={{ background: ["#D6352B", "#1B54B8", "#F2C14E", "#16904A"][i] }} />
                 <div style={{ position: "relative", flex: 1, height: 3, marginLeft: 10,
-                              background: c.color, opacity: 0.55, borderRadius: 2 }}>
-                  {[18, 44, 62, 88].map((p, j) => (
-                    <span key={j} className="anim-pop" style={{ position: "absolute", left: `${p + i * 3}%`, top: "50%",
+                              background: ["#D6352B", "#1B54B8", "#F2C14E", "#16904A"][i], opacity: 0.55, borderRadius: 2 }}>
+                  {[18, 44, 72].map((p, j) => (
+                    <span key={j} className="anim-pop" style={{ position: "absolute", left: `${p}%`, top: "50%",
                       width: 9, height: 9, borderRadius: "50%", background: "#fff",
                       border: "2px solid var(--ink)", transform: "translate(-50%,-50%)",
                       animationDelay: `${600 + i * 90 + j * 70}ms` }} />
                   ))}
                 </div>
+                <span className="mono tiny" style={{ marginLeft: 10, color: "#A9A6B4" }}>{label}</span>
               </div>
             ))}
             <div className="mono anim-up" style={{ fontSize: 10.5, color: "var(--alert)", marginTop: 12,
                  letterSpacing: ".1em", animationDelay: "1.5s" }}>
-              ▮▮▮ {findCollisions(ASSESSMENTS).filter((c) => c.severity !== "normal").length} SERVICE ADVISORIES DETECTED THIS SEMESTER
+              ▮▮▮ SERVICE ADVISORIES APPEAR AFTER YOUR REAL UPLOAD
             </div>
           </div>
         </div>
@@ -572,10 +498,9 @@ function Login({ onEnter }) {
             </div>
 
             <button className="btn btn-signal" style={{ width: "100%", justifyContent: "center" }}
-              onClick={() => onEnter("demo@myhunter.cuny.edu")}>Enter as demo student</button>
+              onClick={() => onEnter("student@cuny.edu")}>Continue to upload</button>
             <p className="tiny" style={{ marginTop: 12 }}>
-              The demo loads five real Hunter syllabi already parsed, so you can see the
-              whole semester without waiting on an upload.
+              The semester stays blank until you upload real syllabus files.
             </p>
           </div>
         </div>
@@ -586,39 +511,24 @@ function Login({ onEnter }) {
 
 /* ------------------------------- 2. UPLOAD --------------------------------- */
 
-const DEMO_FILES = [
-  { name: "CSCI33500_F26_syllabus.pdf", size: "412 KB", found: "6 assessments · 3 policies · 6 topics" },
-  { name: "CSCI26000_syllabus_v2.pdf", size: "298 KB", found: "5 assessments · 3 policies · 6 topics" },
-  { name: "ECO20100-Okonkwo.pdf", size: "1.1 MB", found: "5 assessments · 3 policies · 6 topics" },
-  { name: "discrete_structures_fall26.docx", size: "88 KB", found: "4 assessments · 3 policies · 6 topics" },
-  { name: "ENGL220_scan.jpg", size: "2.4 MB", found: "4 assessments · 3 policies · 6 topics" },
-];
-
 function Upload({ onDone, semesterStart }) {
   const [files, setFiles] = useState([]);
   const [stage, setStage] = useState("idle"); // idle | parsing | done
+  const [loadingStep, setLoadingStep] = useState(0);
   const [drag, setDrag] = useState(false);
-  const [isReal, setIsReal] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(null);
   const [warnings, setWarnings] = useState([]);
   const inputRef = useRef(null);
   const realFilesRef = useRef([]);
+  const inFlightRef = useRef(false);
 
-  const startDemo = () => {
-    setIsReal(false);
-    setError("");
-    setWarnings([]);
-    COURSES = DEMO_COURSES;
-    ASSESSMENTS = DEMO_ASSESSMENTS;
-    setFiles(DEMO_FILES.map((x) => ({ ...x, pct: 0 })));
-    setStage("parsing");
-  };
-
-  const startReal = (fileObjs) => {
-    setIsReal(true);
-    setError("");
+  const startReal = async (fileObjs = realFilesRef.current) => {
+    if (inFlightRef.current || !fileObjs.length) return;
+    inFlightRef.current = true;
+    setError(null);
     setWarnings([]);
     realFilesRef.current = fileObjs;
+    setLoadingStep(0);
     setFiles(fileObjs.map((f) => ({
       name: f.name,
       size: `${Math.max(1, Math.round(f.size / 1024))} KB`,
@@ -626,57 +536,56 @@ function Upload({ onDone, semesterStart }) {
       pct: 0,
     })));
     setStage("parsing");
+
+    // 100s abort timeout so a genuinely stalled request doesn't leave
+    // inFlightRef stuck true forever with no way for the user to retry.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 100000);
+    try {
+      const semester = await askGemini({ files: fileObjs, semesterStart, signal: controller.signal });
+      const normalized = normalizeSemester(semester);
+      COURSES = mergeBy([...COURSES, ...normalized.courses], (course) => course.code);
+      ASSESSMENTS = mergeBy([...ASSESSMENTS, ...normalized.assessments], (assessment) =>
+        assessment.id || `${assessment.course}-${assessment.title}-${assessment.date || assessment.dateText || "undated"}`
+      );
+      saveSemesterState();
+      setWarnings(semester.warnings || []);
+      setFiles((prev) => prev.map((f) => ({
+        ...f, pct: 100,
+        found: `${normalized.courses.length} course(s) · ${normalized.assessments.length} assessments`,
+      })));
+      setTimeout(() => setStage("done"), 300);
+    } catch (err) {
+      setError(toFriendlyUploadError(err));
+      setStage("idle");
+      setFiles((prev) => prev.map((f) => ({ ...f, pct: 0, found: "still selected" })));
+    } finally {
+      inFlightRef.current = false;
+      clearTimeout(timeoutId);
+    }
   };
 
-  // Cosmetic progress ticker. For the demo path it also fires the completion
-  // itself, exactly as before; for a real upload it caps below 100 and waits
-  // for the actual response (next effect) to finish the job.
+  // Cosmetic progress ticker. It caps below 100 until the backend finishes.
   useEffect(() => {
     if (stage !== "parsing") return;
-    const cap = isReal ? 92 : 100;
+    const cap = 92;
     const t = setInterval(() => {
       setFiles((prev) => {
-        const next = prev.map((f, i) => ({ ...f, pct: Math.min(cap, f.pct + (7 + ((i * 3) % 6))) }));
-        if (!isReal && next.every((f) => f.pct >= 100)) {
-          clearInterval(t);
-          setTimeout(() => setStage("done"), 350);
-        }
-        return next;
+        return prev.map((f, i) => ({ ...f, pct: Math.min(cap, f.pct + (7 + ((i * 3) % 6))) }));
       });
     }, 130);
     return () => clearInterval(t);
-  }, [stage, isReal]);
+  }, [stage]);
 
-  // The real Gemini call, only for genuine uploads.
   useEffect(() => {
-    if (stage !== "parsing" || !isReal) return;
-    let cancelled = false;
-    askGemini({ files: realFilesRef.current, semesterStart })
-      .then((semester) => {
-        if (cancelled) return;
-        const normalized = normalizeSemester(semester);
-        COURSES = normalized.courses;
-        ASSESSMENTS = normalized.assessments;
-        setWarnings(semester.warnings || []);
-        setFiles((prev) => prev.map((f) => ({
-          ...f, pct: 100,
-          found: `${normalized.courses.length} course(s) · ${normalized.assessments.length} assessments`,
-        })));
-        setTimeout(() => { if (!cancelled) setStage("done"); }, 300);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(err.message || "Parsing failed. Try again with fewer or smaller files.");
-        setStage("idle");
-        setFiles([]);
-      });
-    return () => { cancelled = true; };
-  }, [stage, isReal, semesterStart]);
+    if (stage !== "parsing") return;
+    const t = setInterval(() => setLoadingStep((s) => (s + 1) % 5), 1400);
+    return () => clearInterval(t);
+  }, [stage]);
 
   const pickFiles = (e) => {
     const chosen = Array.from(e.target.files || []);
     if (chosen.length) startReal(chosen);
-    else startDemo();
   };
 
   return (
@@ -687,7 +596,7 @@ function Upload({ onDone, semesterStart }) {
           <h2 className="d2" style={{ margin: "8px 0 8px" }}>Upload every syllabus at once</h2>
           <p className="lede">
             All of them, in one go. Reading them together is the whole point — that is how
-            the collisions become visible. PDFs, Word files, or a photo of a printout.
+            the collisions become visible. PDFs, Word docs, image files, or a photo of a printout.
           </p>
         </div>
       </div>
@@ -700,32 +609,47 @@ function Upload({ onDone, semesterStart }) {
             e.preventDefault();
             setDrag(false);
             const dropped = Array.from(e.dataTransfer.files || []);
-            dropped.length ? startReal(dropped) : startDemo();
+            if (dropped.length) startReal(dropped);
           }}
           onClick={() => stage === "idle" && inputRef.current?.click()}
           style={{ border: `2px dashed ${drag ? "var(--signal)" : "var(--bone3)"}`, borderRadius: 8,
                    padding: "44px 26px", textAlign: "center", background: drag ? "rgba(242,193,78,.1)" : "#fff",
                    cursor: stage === "idle" ? "pointer" : "default", transition: ".15s" }}>
-          <input ref={inputRef} type="file" multiple hidden accept=".pdf,.docx,.png,.jpg,.jpeg,.txt" onChange={pickFiles} />
+          <input ref={inputRef} type="file" multiple hidden accept=".pdf,.docx,.png,.jpg,.jpeg,.webp,.heic,.txt" onChange={pickFiles} />
           <div className="d3" style={{ marginBottom: 6 }}>
             {stage === "parsing" ? "Reading your semester" : "Drop your syllabi here"}
           </div>
           <p className="tiny" style={{ marginBottom: 16 }}>
             {stage === "parsing"
               ? "Gemini is reading all of them in a single context window."
-              : "Or click to browse. Nothing leaves your session."}
+              : "Or click to browse. PDFs, Word docs, images, and text files work."}
           </p>
-          {stage === "idle" && (
-            <button className="btn btn-signal" onClick={(e) => { e.stopPropagation(); startDemo(); }}>
-              Use five sample syllabi
-            </button>
-          )}
+          {stage === "idle" && <span className="chip chip-warn">REAL SYLLABUS FILES REQUIRED</span>}
+        </div>
+      )}
+
+      {stage === "parsing" && (
+        <div className="next-stop anim-up" style={{ marginTop: 18 }}>
+          <div className="eyebrow" style={{ color: "var(--signal)", marginBottom: 12 }}>Analysis route</div>
+          {["Finding course information", "Finding important dates", "Checking grading policies", "Mapping assessment stops", "Building your course line"].map((label, i) => (
+            <div key={label} style={{ display: "flex", alignItems: "center", gap: 10, margin: "8px 0" }}>
+              <span className="station-dot" style={{ background: i <= loadingStep ? "var(--signal)" : "transparent", color: i <= loadingStep ? "var(--signal)" : "#777" }} />
+              <span className="mono" style={{ fontSize: 12.5, color: i <= loadingStep ? "var(--bone)" : "#8A8898" }}>
+                {i === loadingStep ? "Mapping your course..." : label}
+              </span>
+            </div>
+          ))}
         </div>
       )}
 
       {error && (
         <div className="card" style={{ marginTop: 18, borderColor: "var(--alert)", background: "rgba(228,87,46,.06)" }}>
-          <p className="tiny" style={{ color: "#B03A17", margin: 0 }}>{error}</p>
+          <div className="eyebrow" style={{ color: "var(--alert)", marginBottom: 6 }}>{error.title}</div>
+          <p style={{ fontSize: 14.5, lineHeight: 1.5, margin: "0 0 12px" }}>{error.message}</p>
+          {error.retryAfter && <p className="tiny" style={{ margin: "0 0 12px" }}>Try again in about {error.retryAfter}.</p>}
+          <button className="btn btn-alert" disabled={stage === "parsing"} onClick={() => startReal()}>
+            {error.code === "GEMINI_RATE_LIMITED" ? "Try Again Later" : "Try Again"}
+          </button>
         </div>
       )}
 
@@ -756,7 +680,7 @@ function Upload({ onDone, semesterStart }) {
 
       {stage === "done" && (
         <div className="panel-dark anim-up" style={{ marginTop: 24 }}>
-          <div className="eyebrow" style={{ color: "var(--signal)" }}>What Gemini extracted</div>
+          <div className="eyebrow" style={{ color: "var(--signal)" }}>Course Line Added</div>
           <div style={{ display: "flex", gap: 34, flexWrap: "wrap", margin: "16px 0 20px" }}>
             <Stat n={COURSES.length} label="Courses" />
             <Stat n={ASSESSMENTS.filter((a) => a.date).length} label="Dated assessments" />
@@ -764,20 +688,20 @@ function Upload({ onDone, semesterStart }) {
             <Stat n={findCollisions(ASSESSMENTS).filter((c) => c.severity !== "normal").length}
                   label="Collision weeks" tone="var(--alert)" />
           </div>
-          {isReal && warnings.length > 0 ? (
+          {warnings.length > 0 ? (
             <ul className="tiny" style={{ color: "#A9A6B4", marginBottom: 18, maxWidth: "60ch", paddingLeft: 18 }}>
               {warnings.map((w, i) => <li key={i} style={{ marginBottom: 4 }}>{w}</li>)}
             </ul>
           ) : (
             <p className="tiny" style={{ color: "#A9A6B4", marginBottom: 18, maxWidth: "60ch" }}>
-              {isReal
-                ? "Structured output guarantees the shape of every field, never the truth of it — check any flagged dates on the canvas."
-                : `Six dates were written as "TBA" or "week 12" rather than a calendar date. Those are
-                   flagged rather than guessed at — you will see a hollow marker on the canvas wherever
-                   we are not certain.`}
+              Structured output guarantees the shape of every field, never the truth of it — check any flagged dates on the canvas.
             </p>
           )}
-          <button className="btn btn-signal" onClick={onDone}>Open the semester canvas →</button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-signal" onClick={onDone}>View Semester Canvas →</button>
+            <button className="btn" style={{ background: "#fff", color: "var(--ink)", fontWeight: 700 }}
+              onClick={() => { setStage("idle"); setFiles([]); setWarnings([]); setError(null); }}>Add Another Syllabus</button>
+          </div>
         </div>
       )}
     </div>
@@ -838,6 +762,8 @@ function Rail({ collisions, selected, onSelect, today }) {
                   const on = selected?.id === a.id;
                   return (
                     <button key={a.id} className="station anim-pop" data-on={on ? "1" : "0"}
+                      data-type={a.type}
+                      data-label={TYPE_GLYPH[a.type] || "STOP"}
                       onClick={() => onSelect(on ? null : a)}
                       title={`${a.title} — ${fmtShort(a.date)} — ${a.w}% of grade`}
                       aria-label={`${c.code} ${a.title}, due ${fmtShort(a.date)}, worth ${a.w} percent`}
@@ -901,18 +827,48 @@ function SystemStatus({ collisions, totalHours }) {
   );
 }
 
+function NextStop({ today, onPanic }) {
+  const next = ASSESSMENTS
+    .filter((assessment) => assessment.date && parseISO(assessment.date) >= today)
+    .sort((a, b) => parseISO(a.date) - parseISO(b.date))[0];
+  if (!next) {
+    return <Empty title="No upcoming stops" body="No future dated assessments were found in the uploaded syllabi." />;
+  }
+  const course = courseBy(next.course);
+  const daysAway = Math.max(0, Math.round((parseISO(next.date) - today) / 864e5));
+  return (
+    <div className="next-stop" style={{ marginBottom: 18 }}>
+      <div className="eyebrow" style={{ color: "var(--signal)" }}>Next Stop</div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 18, flexWrap: "wrap", alignItems: "center", marginTop: 12 }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            {course && <Bullet course={course} size="md" />}
+            <span className="chip" style={{ color: "var(--bone)", borderColor: "rgba(255,255,255,.25)" }}>{TYPE_GLYPH[next.type] || "STOP"}</span>
+          </div>
+          <div className="d3" style={{ fontSize: 25 }}>{next.course} · {next.title}</div>
+          <p className="mono tiny" style={{ color: "#C9C5BC", marginTop: 8 }}>
+            {fmtShort(next.date)} · {daysAway === 0 ? "today" : `${daysAway} days away`}
+            {next.w ? ` · ${next.w}% of course grade` : ""}
+          </p>
+        </div>
+        <button className="btn btn-signal" onClick={() => onPanic(next.id)}>Build route around this</button>
+      </div>
+    </div>
+  );
+}
+
 function CanvasView({ today, onExport, onPanic }) {
   const [sel, setSel] = useState(null);
   const collisions = useMemo(() => findCollisions(ASSESSMENTS), []);
   const hot = collisions.filter((c) => c.severity !== "normal");
-  const worst = collisions.reduce((a, b) => (b.share > a.share ? b : a), collisions[0]);
+  const worst = collisions.length ? collisions.reduce((a, b) => (b.share > a.share ? b : a), collisions[0]) : null;
   const totalHours = ASSESSMENTS.reduce((s, a) => s + (a.date ? a.hours : 0), 0);
 
   return (
     <div>
       <div className="head">
         <div>
-          <div className="eyebrow">Fall 2026 · 5 courses · 16 weeks</div>
+          <div className="eyebrow">Fall 2026 · {COURSES.length} course{COURSES.length === 1 ? "" : "s"} · {WEEKS} weeks</div>
           <h2 className="d2" style={{ margin: "8px 0 6px" }}>The semester canvas</h2>
           <p className="lede">
             Each line is a course. Each station is something you are graded on, sized by how
@@ -926,12 +882,13 @@ function CanvasView({ today, onExport, onPanic }) {
       <div className="card" style={{ display: "flex", gap: 36, flexWrap: "wrap", marginBottom: 18 }}>
         <Stat n={ASSESSMENTS.filter((a) => a.date).length} label="Graded events" />
         <Stat n={hot.length} label="Collision weeks" tone="var(--alert)" />
-        <Stat n={`Wk ${worst.week}`} label="Heaviest week" tone="var(--alert)" />
+        <Stat n={worst ? `Wk ${worst.week}` : "—"} label="Heaviest week" tone="var(--alert)" />
         <Stat n={`${totalHours}h`} label="Prep hours ahead" />
         <Stat n={ASSESSMENTS.filter((a) => a.conf !== "explicit").length} label="Uncertain dates" tone="#8A6510" />
       </div>
 
       <SystemStatus collisions={collisions} totalHours={totalHours} />
+      <NextStop today={today} onPanic={onPanic} />
 
       <div className="panel-dark" style={{ marginBottom: 18 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
@@ -945,6 +902,7 @@ function CanvasView({ today, onExport, onPanic }) {
 
       {sel && (() => {
         const c = courseBy(sel.course);
+        if (!c) return null;
         return (
           <div className="card anim-up" style={{ marginBottom: 18, borderLeft: `4px solid ${c.color}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
@@ -986,6 +944,9 @@ function CanvasView({ today, onExport, onPanic }) {
           <p className="tiny" style={{ margin: "8px 0 16px" }}>
             Weeks where enough of your grade lands at once that no single syllabus warned you.
           </p>
+          {hot.length === 0 && (
+            <Empty title="No advisories yet" body="Once dated assignments or exams overlap, this area will flag the weeks that need extra planning." />
+          )}
           {hot.map((c) => (
             <div key={c.week} style={{ marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
@@ -998,7 +959,7 @@ function CanvasView({ today, onExport, onPanic }) {
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 7 }}>
                 {c.list.map((a) => (
-                  <span key={a.id} className="chip" style={{ borderColor: courseBy(a.course).color }}>
+                  <span key={a.id} className="chip" style={{ borderColor: courseBy(a.course)?.color || "var(--bone3)" }}>
                     <Bullet course={a.course} size="sm" /> {TYPE_GLYPH[a.type]} · {a.w}%
                   </span>
                 ))}
@@ -1014,7 +975,7 @@ function CanvasView({ today, onExport, onPanic }) {
         <div className="card">
           <div className="eyebrow">Workload forecast</div>
           <p className="tiny" style={{ margin: "8px 0 12px" }}>
-            Share of your entire semester grade decided in each week, all five courses combined.
+            Share of your entire semester grade decided in each week, all courses combined.
           </p>
           <Forecast collisions={collisions} />
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
@@ -1023,11 +984,17 @@ function CanvasView({ today, onExport, onPanic }) {
           <hr className="rule" />
           <div className="card-flat">
             <div className="eyebrow" style={{ marginBottom: 6 }}>The one thing to know</div>
-            <p style={{ fontSize: 14.5, lineHeight: 1.5, margin: 0 }}>
-              <strong>Week {worst.week}</strong> decides <strong>{worst.share}%</strong> of your
-              whole semester across {worst.courses} courses, in {worst.exams} exams. Everything
-              before it is preparation for it, whether you plan that way or not.
-            </p>
+            {worst ? (
+              <p style={{ fontSize: 14.5, lineHeight: 1.5, margin: 0 }}>
+                <strong>Week {worst.week}</strong> decides <strong>{worst.share}%</strong> of your
+                whole semester across {worst.courses} courses, in {worst.exams} exams. Everything
+                before it is preparation for it, whether you plan that way or not.
+              </p>
+            ) : (
+              <p style={{ fontSize: 14.5, lineHeight: 1.5, margin: 0 }}>
+                No dated grading events were found yet. Upload another syllabus or check the file if this seems wrong.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -1303,6 +1270,7 @@ function Plan({ plan, panicId, onClearPanic, onExport, today, maxPerDay }) {
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 11 }}>
                   {d.blocks.map((b, j) => {
                     const c = courseBy(b.a.course);
+                    if (!c) return null;
                     const daysOut = Math.round((parseISO(b.a.date) - d.date) / 864e5);
                     return (
                       <div key={j} style={{ display: "flex", alignItems: "center", gap: 10,
@@ -1386,6 +1354,9 @@ function Flashcards({ cards, color }) {
   const [i, setI] = useState(0);
   const [flip, setFlip] = useState(false);
   const [known, setKnown] = useState([]);
+  if (!cards.length) {
+    return <Empty title="No flashcards yet" body="Upload notes, slides, or a syllabus with topics before flashcards are generated." />;
+  }
   const card = cards[i % cards.length];
   const next = (got) => {
     setKnown((p) => (got ? [...new Set([...p, card.q])] : p.filter((x) => x !== card.q)));
@@ -1424,9 +1395,9 @@ function Flashcards({ cards, color }) {
 }
 
 function makeCards(course) {
-  return course.topics.map((t) => ({
+  return (course?.topics || []).map((t) => ({
     q: t,
-    a: course.topicDefs?.[t] || GENERATED_DEFS[t] || `Gemini writes this definition from the material you upload for ${course.code}.`,
+    a: course.topicDefs?.[t] || GENERATED_DEFS[t] || `Definition will come from uploaded notes for ${course.code}.`,
   }));
 }
 
@@ -1471,11 +1442,15 @@ function Quiz({ course, cards }) {
     const own = cards.map((c) => [c.q, c.a]);
     return own.length > 4 ? own : [...own, ...Object.entries(GENERATED_DEFS)];
   }, [cards]);
-  const q = cards[qi % cards.length];
+  const q = cards[qi % cards.length] || { q: "", a: "" };
   const options = useMemo(() => {
     const wrong = pool.filter(([k]) => k !== q.q).sort(() => Math.random() - 0.5).slice(0, 3).map(([, v]) => v);
     return [q.a, ...wrong].sort(() => Math.random() - 0.5);
   }, [qi, q.q, q.a, pool]);
+
+  if (!cards.length) {
+    return <Empty title="No quiz yet" body="Generate flashcards from your uploaded notes first, then the quiz can use those cards." />;
+  }
 
   return (
     <div>
@@ -1512,13 +1487,20 @@ function CourseVault({ course, today }) {
   const [tab, setTab] = useState("overview");
   const [material, setMaterial] = useState([]);
   const [gen, setGen] = useState(false);
-  const items = ASSESSMENTS.filter((a) => a.course === course.code);
-  const upcoming = items.filter((a) => !a.date || parseISO(a.date) >= today);
-  const cards = useMemo(() => makeCards(course), [course.code]);
+  const materialRef = useRef(null);
+  const items = course ? ASSESSMENTS.filter((a) => a.course === course.code) : [];
+  const upcoming = items.filter((a) => !a.date || parseISO(a.date) >= today)
+    .sort((a, b) => (a.date ? parseISO(a.date) : new Date(9999, 0, 1)) - (b.date ? parseISO(b.date) : new Date(9999, 0, 1)));
+  const cards = useMemo(() => makeCards(course), [course?.code]);
   const decided = items.reduce((s, a) => s + a.w, 0);
+  const next = upcoming.find((a) => a.date);
 
-  const TABS = [["overview", "Overview"], ["vault", "Material vault"],
-                ["cards", "Flashcards"], ["quiz", "Quiz me"], ["grade", "Grade simulator"]];
+  if (!course) {
+    return <Empty title="Pick a course" body="Choose one of your uploaded courses to see policies, deadlines, and study tools." />;
+  }
+
+  const TABS = [["overview", "Overview"], ["schedule", "Schedule"], ["assignments", "Assignments"],
+                ["grading", "Grading"], ["policies", "Policies"], ["resources", "Resources"]];
 
   return (
     <div>
@@ -1537,64 +1519,152 @@ function CourseVault({ course, today }) {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
+      <div className="station-tabs">
         {TABS.map(([k, l]) => (
-          <button key={k} className="chip" onClick={() => setTab(k)}
-            style={{ background: tab === k ? course.color : "#fff", color: tab === k ? "#fff" : "var(--ink)",
-                     borderColor: tab === k ? course.color : "var(--bone3)", padding: "6px 12px", fontSize: 11.5 }}>
-            {l.toUpperCase()}
+          <button key={k} className="station-tab" data-on={tab === k ? "1" : "0"} onClick={() => setTab(k)}>
+            <span className="station-dot" style={{ color: tab === k ? course.color : undefined }} />{l}
           </button>
         ))}
       </div>
 
       {tab === "overview" && (
         <div className="grid-2">
-          <div className="card">
-            <div className="eyebrow">Where your grade comes from</div>
-            <div style={{ marginTop: 14 }}>
-              {course.grading.map((g) => (
-                <div key={g.cat} style={{ marginBottom: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                    <span style={{ fontSize: 14, fontWeight: 500 }}>
-                      {g.cat} {g.drops && <span className="chip chip-go" style={{ marginLeft: 6 }}>DROPS LOWEST</span>}
-                    </span>
-                    <span className="mono tiny">{g.w}%</span>
-                  </div>
-                  <div className="bar"><i style={{ width: `${g.w}%`, background: course.color }} /></div>
-                </div>
-              ))}
-            </div>
+          <div className="card route-card" style={{ "--line": course.color }}>
+            <div className="eyebrow">Course header</div>
+            <h3 className="d3" style={{ margin: "10px 0 8px" }}>{course.title}</h3>
+            <p style={{ fontSize: 14.5, lineHeight: 1.55, margin: 0 }}>{course.description || "No course description found in the syllabus."}</p>
             <hr className="rule" />
-            <div className="eyebrow" style={{ marginBottom: 8 }}>Policies, in plain language</div>
-            <p style={{ fontSize: 14, lineHeight: 1.55, margin: "0 0 10px" }}>
-              <strong>Late work.</strong> {course.late}
-            </p>
-            <p style={{ fontSize: 14, lineHeight: 1.55, margin: 0 }}>
-              <strong>Attendance.</strong> {course.attendance}
-            </p>
+            <div className="grid-2">
+              <Info label="Professor" value={course.contact?.name || course.instructor} />
+              <Info label="Email" value={course.contact?.email} />
+              <Info label="Office" value={course.contact?.office} />
+              <Info label="Office Hours" value={course.contact?.officeHoursText} />
+              <Info label="Term" value={[course.semester, course.year].filter(Boolean).join(" ")} />
+              <Info label="Credits" value={course.credits} />
+            </div>
           </div>
           <div className="card">
-            <div className="eyebrow">What is still ahead</div>
-            <div style={{ marginTop: 12 }}>
-              {upcoming.map((a) => (
-                <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-                     gap: 10, padding: "10px 0", borderBottom: "1px solid var(--bone2)" }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 14.5, fontWeight: 500 }}>{a.title}</div>
-                    <div className="mono tiny">
-                      {a.date ? `${fmtShort(a.date)} · ${Math.round((parseISO(a.date) - today) / 864e5)} days out` : "no date given"}
-                    </div>
-                  </div>
-                  <span className="chip" style={{ borderColor: course.color, flex: "0 0 auto" }}>{a.w}%</span>
-                </div>
-              ))}
-            </div>
-            <div className="card-flat" style={{ marginTop: 16 }}>
-              <p className="tiny" style={{ margin: 0 }}>
-                <strong>{decided}%</strong> of this course is still undecided as of today. That is how
-                much leverage you have left here.
+            <div className="eyebrow">Quick route info</div>
+            <div className="card-flat" style={{ marginTop: 12 }}>
+              <div className="eyebrow">Next Stop</div>
+              <div className="d3" style={{ marginTop: 6 }}>{next ? next.title : "No upcoming dated stop"}</div>
+              <p className="mono tiny" style={{ marginTop: 6 }}>
+                {next ? `${fmtShort(next.date)}${next.w ? ` · ${next.w}%` : ""}` : "Upload another syllabus if dates are missing."}
               </p>
             </div>
+            <div className="card-flat" style={{ marginTop: 12 }}>
+              <div className="eyebrow">Meeting</div>
+              <p className="mono tiny" style={{ marginTop: 6 }}>
+                {course.meets.length ? course.meets.map((m) => `${DAYS[m.d]} ${hourLabel(m.s)}–${hourLabel(m.e)}`).join(" · ") : "Meeting time not found in syllabus"}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "schedule" && (
+        <div className="grid-2">
+          <div className="card">
+            <div className="eyebrow">Class stops</div>
+            {course.meets.length ? course.meets.map((m, i) => (
+              <div key={i} className="card-flat" style={{ marginTop: 10 }}>
+                <strong>{m.type || "Class"}</strong>
+                <div className="mono tiny">{DAYS[m.d]} {hourLabel(m.s)}–{hourLabel(m.e)} · {m.location || course.room}</div>
+              </div>
+            )) : <Empty title="No meeting schedule found" body="The planner will not block class time unless the syllabus includes meeting days and times." />}
+          </div>
+          <div className="card">
+            <div className="eyebrow">Weekly schedule</div>
+            {course.weeklySchedule.length ? course.weeklySchedule.map((week, i) => (
+              <div key={i} style={{ padding: "11px 0", borderBottom: "1px solid var(--bone2)" }}>
+                <div className="mono tiny">Week {week.week || i + 1} · {week.dateRange || "date range unavailable"}</div>
+                <strong>{(week.topics || []).join(", ") || "Topics not listed"}</strong>
+                {(week.readings || []).length > 0 && <div className="tiny">Readings: {week.readings.join(", ")}</div>}
+                {(week.assignments || []).length > 0 && <div className="tiny">Assignments: {week.assignments.join(", ")}</div>}
+              </div>
+            )) : <Empty title="No weekly schedule found" body="If the syllabus has no weekly calendar, this section stays empty instead of guessing." />}
+          </div>
+        </div>
+      )}
+
+      {tab === "assignments" && (
+        <div className="card">
+          <div className="eyebrow">Upcoming stops</div>
+          {upcoming.length ? upcoming.map((a) => (
+            <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                 gap: 12, padding: "12px 0", borderBottom: "1px solid var(--bone2)" }}>
+              <div>
+                <div className="mono tiny">{a.date ? fmtShort(a.date) : a.dateText || "date unavailable"}</div>
+                <strong>{a.title}</strong>
+                {(a.description || a.notes) && <p className="tiny" style={{ margin: "4px 0 0" }}>{a.description || a.notes}</p>}
+              </div>
+              <span className="chip" style={{ borderColor: course.color }}>{a.w ? `${a.w}%` : a.points ? `${a.points} pts` : "weight unavailable"}</span>
+            </div>
+          )) : <Empty title="No assignments found" body="No assessments were extracted for this course." />}
+        </div>
+      )}
+
+      {tab === "grading" && (
+        <div className="grid-2">
+          <div className="card">
+            <div className="eyebrow">Grade breakdown</div>
+            {course.grading.length ? course.grading.map((g) => (
+              <div key={g.cat} style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{g.cat} {g.drops && <span className="chip chip-go">DROPS LOWEST</span>}</span>
+                  <span className="mono tiny">{g.w ? `${g.w}%` : g.points ? `${g.points} pts` : "weight unavailable"}</span>
+                </div>
+                {g.w ? <div className="bar"><i style={{ width: `${Math.min(100, g.w)}%`, background: course.color }} /></div> : null}
+                {g.notes && <p className="tiny">{g.notes}</p>}
+              </div>
+            )) : <Empty title="No grading breakdown found" body="Gemini did not find a concrete grading breakdown in this syllabus." />}
+            {course.gradingNotes && <p className="tiny" style={{ marginTop: 14 }}>{course.gradingNotes}</p>}
+          </div>
+          <div className="card">
+            <div className="eyebrow">Letter scale</div>
+            {course.gradeScale.length ? course.gradeScale.map((g) => (
+              <div key={g.letter} className="card-flat" style={{ marginTop: 8, display: "flex", justifyContent: "space-between" }}>
+                <strong>{g.letter}</strong><span className="mono tiny">{g.min ?? "?"}–{g.max ?? "?"}</span>
+              </div>
+            )) : <Empty title="No grade scale found" body="No letter-grade scale was listed in the syllabus." />}
+          </div>
+        </div>
+      )}
+
+      {tab === "policies" && (
+        <div className="grid-2">
+          {(course.policies.length ? course.policies : [
+            { category: "Late Work", summary: course.late },
+            { category: "Attendance", summary: course.attendance },
+          ]).map((policy) => (
+            <div key={policy.category} className="card route-card" style={{ "--line": course.color }}>
+              <div className="eyebrow">{policy.category}</div>
+              <p style={{ fontSize: 14.5, lineHeight: 1.55, margin: "8px 0 0" }}>{policy.summary}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === "resources" && (
+        <div className="grid-2">
+          <div className="card">
+            <div className="eyebrow">Course materials</div>
+            {course.materials.length ? course.materials.map((item, i) => (
+              <div key={i} className="card-flat" style={{ marginTop: 8 }}>
+                <strong>{item.type}: {item.name}</strong>
+                {item.details && <p className="tiny" style={{ margin: "4px 0 0" }}>{item.details}</p>}
+              </div>
+            )) : <Empty title="No required materials found" body="No textbook, software, platform, or equipment requirements were extracted." />}
+          </div>
+          <div className="card">
+            <div className="eyebrow">Important links</div>
+            {course.links.length ? course.links.map((link) => (
+              <a key={link.url} href={link.url} target="_blank" rel="noreferrer" className="card-flat"
+                style={{ display: "block", marginTop: 8, color: "var(--ink)", textDecoration: "none" }}>
+                <strong>{link.label}</strong>
+                <div className="mono tiny">{link.url}</div>
+              </a>
+            )) : <Empty title="No links found" body="Only valid links from the syllabus appear here." />}
           </div>
         </div>
       )}
@@ -1607,10 +1677,16 @@ function CourseVault({ course, today }) {
               Lecture slides, your notes, the review sheet, a photo of the whiteboard. Gemini reads
               them alongside the syllabus so the study tools match what {course.instructor.split(" ")[1]} actually tests.
             </p>
+            <input ref={materialRef} type="file" multiple hidden accept=".pdf,.docx,.png,.jpg,.jpeg,.txt,.md"
+              onChange={(e) => {
+                const picked = Array.from(e.target.files || []).map((file) => ({
+                  name: file.name,
+                  n: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+                }));
+                setMaterial((p) => [...p, ...picked]);
+              }} />
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button className="btn btn-primary" onClick={() => {
-                setMaterial((p) => [...p, { name: `lecture_${p.length + 8}_slides.pdf`, n: 24 + p.length * 3 }]);
-              }}>Add material</button>
+              <button className="btn btn-primary" onClick={() => materialRef.current?.click()}>Upload notes PDF</button>
               {material.length > 0 && (
                 <button className="btn btn-signal" onClick={() => { setGen(true); setTimeout(() => setTab("cards"), 900); }}>
                   {gen ? "Generating…" : "Generate study tools"}
@@ -1626,7 +1702,7 @@ function CourseVault({ course, today }) {
                 <div key={i} className="card anim-up" style={{ padding: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
                     <div className="mono" style={{ fontSize: 12.5, fontWeight: 600 }}>{m.name}</div>
-                    <div className="tiny">{m.n} slides · {course.topics.length} concepts recognised</div>
+                    <div className="tiny">{m.n} · ready for study-tool generation</div>
                   </div>
                   <span className="chip chip-go">INDEXED</span>
                 </div>
@@ -1663,7 +1739,7 @@ function Policies() {
           <div className="eyebrow">Cross-course reference</div>
           <h2 className="d2" style={{ margin: "8px 0 6px" }}>Every policy, on one page</h2>
           <p className="lede">
-            Five syllabi have five different rules about being late. This is the page you
+            Every syllabus has its own rules about being late. This is the page you
             actually need at 11:40pm.
           </p>
         </div>
@@ -1728,13 +1804,68 @@ function buildICS(plan) {
 
 const API_BASE = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE) || "http://localhost:8080/api";
 
-async function askGemini({ files, semesterStart }) {
+function toFriendlyUploadError(err) {
+  if (err?.name === "AbortError") {
+    return {
+      code: "TIMEOUT",
+      title: "Signal Lost",
+      message: "Gemini didn't respond within 100 seconds. Your uploaded file is still here — try again with fewer or smaller files.",
+    };
+  }
+
+  if (err?.code === "NETWORK_FAILURE") {
+    return {
+      code: "NETWORK_FAILURE",
+      title: "Connection Interrupted",
+      message: "Check your connection and try again.",
+    };
+  }
+
+  if (err?.status === 429 || err?.code === "GEMINI_RATE_LIMITED" || /429|RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(err?.raw || err?.message || "")) {
+    return {
+      code: "GEMINI_RATE_LIMITED",
+      title: "Service Delay",
+      message: "Gemini traffic is currently high. Course Canvas couldn't analyze your syllabus because the AI service has reached its current request limit. Your uploaded file is still here.",
+      retryAfter: err?.retryAfter || null,
+    };
+  }
+
+  if (err?.status === 400 || err?.code === "INVALID_DOCUMENT") {
+    return {
+      code: "INVALID_DOCUMENT",
+      title: "We couldn't read this syllabus.",
+      message: "Try another PDF or make sure the file contains readable syllabus content.",
+    };
+  }
+
+  return {
+    code: "SIGNAL_PROBLEM",
+    title: "Signal Problem",
+    message: "Something went wrong while analyzing your syllabus.",
+  };
+}
+
+async function askGemini({ files, semesterStart, signal }) {
   const body = new FormData();
   files.forEach((f) => body.append("files", f));
   body.append("semesterStart", semesterStart);
-  const res = await fetch(`${API_BASE}/parse`, { method: "POST", body });
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/parse`, { method: "POST", body, signal });
+  } catch (err) {
+    if (err?.name === "AbortError") throw err;
+    throw Object.assign(new Error("Network request failed."), { code: "NETWORK_FAILURE", raw: err?.message });
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Parsing failed (${res.status}).`);
+  if (!res.ok) {
+    throw Object.assign(new Error(data.message || data.error || `Parsing failed (${res.status}).`), {
+      status: res.status,
+      code: data.code,
+      title: data.title,
+      retryAfter: data.retryAfter,
+      raw: JSON.stringify(data),
+    });
+  }
   return data; // { courses, assessments, warnings }
 }
 
@@ -1748,6 +1879,8 @@ const PALETTE = ["#D6352B", "#1B54B8", "#E07316", "#16904A", "#8E3FA6", "#0E8C8C
 const DEFAULT_HOURS = { exam: 10, quiz: 4, project: 9, paper: 8, homework: 4, presentation: 6, other: 3 };
 const DAY_TWO = { su: 0, mo: 1, tu: 2, we: 3, th: 4, fr: 5, sa: 6 };
 const DAY_ONE = { u: 0, m: 1, t: 2, w: 3, r: 4, f: 5, s: 6 };
+const DAY_NAME = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
+  sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
 
 function shortFromCode(code = "") {
   const digits = code.replace(/\D/g, "");
@@ -1773,6 +1906,12 @@ function to24(h, ampm) {
   return ampm === "pm" ? hh + 12 : hh;
 }
 
+function hourFromClock(clock = "") {
+  const match = String(clock).match(/^(\d{1,2})(?::(\d{2}))?/);
+  if (!match) return null;
+  return Number(match[1]) + Number(match[2] || 0) / 60;
+}
+
 // Best-effort parse of freeform strings like "MW 10:00-11:50am" or "TTh 1-2:15pm".
 // Meeting times that don't match a recognizable pattern just yield no blocks —
 // the course still shows up everywhere else, it just won't occupy the planner.
@@ -1790,21 +1929,59 @@ function parseMeetingTimes(raw = "") {
   return days.map((d) => ({ d, s: Math.floor(start), e: Math.max(Math.floor(start) + 1, Math.ceil(end)) }));
 }
 
+function normalizeMeetings(course) {
+  const structured = (course.meetings || []).flatMap((meeting) => {
+    const start = hourFromClock(meeting.startTime);
+    const end = hourFromClock(meeting.endTime);
+    if (start === null || end === null) return [];
+    return (meeting.days || []).flatMap((day) => {
+      const d = DAY_NAME[String(day).toLowerCase()];
+      return d === undefined ? [] : [{
+        d,
+        s: Math.floor(start),
+        e: Math.max(Math.floor(start) + 1, Math.ceil(end)),
+        type: meeting.type,
+        location: meeting.location,
+        modality: meeting.modality,
+      }];
+    });
+  });
+  return structured.length ? structured : parseMeetingTimes(course.meetingTimes || "");
+}
+
 function normalizeSemester(semester) {
   const courses = (semester.courses || []).map((c, i) => {
     const topicDefs = {};
     (c.topicDefinitions || []).forEach(({ topic, definition }) => { topicDefs[topic] = definition; });
+    const contact = c.instructorContact || {};
+    const meetings = normalizeMeetings(c);
     return {
       code: c.code,
       short: shortFromCode(c.code),
-      title: c.title,
-      instructor: c.instructor || "Instructor TBA",
-      color: PALETTE[i % PALETTE.length],
-      meets: parseMeetingTimes(c.meetingTimes || ""),
-      room: c.room || "Room TBA",
-      late: c.latePolicy || "No late policy specified in the syllabus.",
-      attendance: c.attendancePolicy || "No attendance policy specified in the syllabus.",
-      grading: (c.gradingPolicy || []).map((g) => ({ cat: g.category, w: g.weightPercent || 0, drops: !!g.dropsLowest })),
+      title: c.title || c.code || "Untitled course",
+      instructor: c.instructor || "Instructor not found in syllabus",
+      contact,
+      section: c.section,
+      semester: c.semester,
+      year: c.year,
+      department: c.department,
+      credits: c.credits,
+      color: PALETTE[(COURSES.length + i) % PALETTE.length],
+      meets: meetings,
+      meetingText: c.meetingTimes,
+      room: c.room || meetings.find((m) => m.location)?.location || "Room not found in syllabus",
+      description: c.description,
+      objectives: c.learningObjectives || [],
+      skills: c.skills || [],
+      late: c.latePolicy || "No late policy found in the syllabus.",
+      attendance: c.attendancePolicy || "No attendance policy found in the syllabus.",
+      grading: (c.gradingPolicy || []).map((g) => ({ cat: g.category || "Unlabeled grading item", w: g.weightPercent ?? 0, points: g.points, notes: g.notes, drops: !!g.dropsLowest })),
+      gradeScale: c.gradeScale || [],
+      gradingNotes: c.gradingNotes,
+      policies: c.policies || [],
+      materials: c.materials || [],
+      links: (c.links || []).filter((link) => /^https?:\/\//i.test(link.url || "")),
+      weeklySchedule: c.weeklySchedule || [],
       topics: c.topics || [],
       topicDefs,
     };
@@ -1816,12 +1993,143 @@ function normalizeSemester(semester) {
     title: a.title,
     type: a.type,
     date: a.dueDate || null,
+    dueTime: a.dueTime,
+    originalDateText: a.originalDateText,
+    dateText: a.dateText,
     w: a.weightPercent ?? 0,
+    points: a.points,
+    description: a.description,
+    notes: a.notes,
     conf: a.dateConfidence || (a.dueDate ? "explicit" : "unknown"),
     hours: a.estimatedHours ?? DEFAULT_HOURS[a.type] ?? 4,
   }));
 
   return { courses, assessments };
+}
+
+function NeedUpload({ onUpload }) {
+  return (
+    <Empty
+      title="Upload a syllabus first"
+      body="Canvas, Courses, Planner, Flashcards, and Quiz stay locked until Gemini successfully reads a real syllabus file."
+      action={<button className="btn btn-signal" onClick={onUpload}>Go to syllabus upload</button>}
+    />
+  );
+}
+
+function CoursesPage({ courseCode, setCourseCode, today }) {
+  const course = courseBy(courseCode) || COURSES[0];
+  return (
+    <div>
+      <div className="head">
+        <div>
+          <div className="eyebrow">Semester / Courses</div>
+          <h2 className="d2" style={{ margin: "8px 0 6px" }}>Your uploaded courses</h2>
+          <p className="lede">Every card here comes from the syllabus files you uploaded.</p>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
+        {COURSES.map((c) => (
+          <button key={c.code} className="chip" onClick={() => setCourseCode(c.code)}
+            style={{ background: course?.code === c.code ? c.color : "#fff", color: course?.code === c.code ? "#fff" : "var(--ink)",
+                     borderColor: course?.code === c.code ? c.color : "var(--bone3)" }}>
+            {c.code}
+          </button>
+        ))}
+      </div>
+      <CourseVault course={course} today={today} />
+    </div>
+  );
+}
+
+function PlannerPage(props) {
+  return (
+    <div>
+      <div className="head">
+        <div>
+          <div className="eyebrow">Semester / Planner</div>
+          <h2 className="d2" style={{ margin: "8px 0 6px" }}>My week, availability, and study route</h2>
+          <p className="lede">Class blocks come from your syllabi. Personal time, commute buffers, and study blocks come from your choices.</p>
+        </div>
+      </div>
+      <Availability {...props.availabilityProps} />
+      <div style={{ height: 22 }} />
+      <Plan {...props.planProps} />
+    </div>
+  );
+}
+
+function StudyPage({ mode, courseCode, setCourseCode, notes, setNotes }) {
+  const inputRef = useRef(null);
+  const course = courseBy(courseCode) || COURSES[0];
+  const cards = notes.length && course ? makeCards(course) : [];
+
+  return (
+    <div>
+      <div className="head">
+        <div>
+          <div className="eyebrow">Study / {mode}</div>
+          <h2 className="d2" style={{ margin: "8px 0 6px" }}>
+            {mode === "notes" ? "Upload notes from iPad or computer" : mode === "flashcards" ? "Flashcards from your notes" : "Quiz from your flashcards"}
+          </h2>
+          <p className="lede">Pick a real uploaded course, then add your notes PDFs, images, or documents.</p>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 18 }}>
+        <div className="eyebrow" style={{ marginBottom: 10 }}>Course</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {COURSES.map((c) => (
+            <button key={c.code} className="chip" onClick={() => setCourseCode(c.code)}
+              style={{ background: course?.code === c.code ? c.color : "#fff", color: course?.code === c.code ? "#fff" : "var(--ink)",
+                       borderColor: course?.code === c.code ? c.color : "var(--bone3)" }}>
+              {c.code}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {mode === "notes" && (
+        <div className="card">
+          <input ref={inputRef} type="file" multiple hidden accept=".pdf,.docx,.png,.jpg,.jpeg,.txt,.md"
+            onChange={(e) => {
+              const picked = Array.from(e.target.files || []).map((file) => ({
+                name: file.name,
+                size: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+              }));
+              setNotes((p) => [...p, ...picked]);
+            }} />
+          <div className="eyebrow">Notes input</div>
+          <p className="lede" style={{ fontSize: 14.5, margin: "8px 0 16px" }}>
+            Upload PDFs, screenshots, Word docs, or text notes. No sample notes are loaded for you.
+          </p>
+          <button className="btn btn-primary" onClick={() => inputRef.current?.click()}>Upload notes file</button>
+          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+            {notes.length === 0 ? (
+              <Empty title="No notes uploaded" body="Add a real notes file to unlock flashcards and quiz mode." />
+            ) : notes.map((note, i) => (
+              <div key={note.name + i} className="card-flat" style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <span className="mono tiny">{note.name}</span>
+                <span className="chip chip-go">{note.size}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {mode === "flashcards" && (
+        <div style={{ maxWidth: 600 }}>
+          <Flashcards cards={cards} color={course?.color || "var(--ink)"} />
+        </div>
+      )}
+
+      {mode === "quiz" && (
+        <div style={{ maxWidth: 640 }} className="card">
+          <Quiz course={course} cards={cards} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* --------------------------------- APP ------------------------------------ */
@@ -1837,10 +2145,15 @@ export default function CourseCanvas() {
   const [commuteBuffer, setCommuteBuffer] = useState(1);
   const [panicId, setPanicId] = useState(null);
   const [ics, setIcs] = useState(null);
-  // Bumped whenever Upload reassigns the module-level COURSES/ASSESSMENTS
-  // (real parse or a reset to the demo semester), so memoized derivations
-  // below re-run and every view under <main> gets a fresh mount.
+  const [notes, setNotes] = useState([]);
+  // Bumped whenever Upload reassigns the module-level COURSES/ASSESSMENTS, so
+  // memoized derivations below re-run and every view under <main> gets a fresh mount.
   const [dataVersion, setDataVersion] = useState(0);
+
+  useEffect(() => {
+    if (COURSES.length) return;
+    if (loadSemesterState()) setDataVersion((v) => v + 1);
+  }, []);
 
   const today = useMemo(() => {
     const t = new Date();
@@ -1865,10 +2178,11 @@ export default function CourseCanvas() {
   };
 
   if (!user) return <Login onEnter={(e) => { setUser(e); setView("upload"); }} />;
+  const hasSemester = COURSES.length > 0;
 
   const NAV = [
-    ["Semester", [["canvas", "Canvas"], ["upload", "Syllabi"], ["policies", "Policies"]]],
-    ["Planning", [["availability", "Availability"], ["plan", "Study plan"]]],
+    ["Semester", [["upload", "Syllabus"], ["canvas", "Canvas"], ["courses", "Courses"], ["planner", "Planner"]]],
+    ["Study", [["notes", "Notes"], ["flashcards", "Flashcards"], ["quiz", "Quiz"]]],
   ];
 
   return (
@@ -1886,14 +2200,14 @@ export default function CourseCanvas() {
               <div className="nav-label">{label}</div>
               {items.map(([k, l]) => (
                 <button key={k} className="nav-item" data-on={view === k ? "1" : "0"}
-                  onClick={() => { setView(k); setCourseCode(null); }}>
+                  onClick={() => { setView(k === "upload" || hasSemester ? k : "upload"); if (k !== "courses") setCourseCode(null); }}>
                   <span className="nav-tick" />{l}
                 </button>
               ))}
             </div>
           ))}
 
-          <div className="nav-group">
+          {hasSemester && <div className="nav-group">
             <div className="nav-label">Courses</div>
             {COURSES.map((c) => (
               <button key={c.code} className="nav-item"
@@ -1905,7 +2219,7 @@ export default function CourseCanvas() {
                 </span>
               </button>
             ))}
-          </div>
+          </div>}
 
           <div className="nav-foot">
             <div className="mono" style={{ fontSize: 10.5, color: "#7E7C8E", marginBottom: 3 }}>SIGNED IN</div>
@@ -1924,19 +2238,37 @@ export default function CourseCanvas() {
             />
           )}
           {view === "canvas" && (
-            <CanvasView today={today} onExport={exportICS}
-              onPanic={(id) => { setPanicId(id); setView("plan"); }} />
+            hasSemester ? (
+              <CanvasView today={today} onExport={exportICS}
+                onPanic={(id) => { setPanicId(id); setView("planner"); }} />
+            ) : <NeedUpload onUpload={() => setView("upload")} />
           )}
-          {view === "policies" && <Policies />}
-          {view === "availability" && (
-            <Availability {...{ extraBusy, setExtraBusy, constraints, setConstraints, daysOff, setDaysOff,
-              maxPerDay, setMaxPerDay, commuteBuffer, setCommuteBuffer }} onBuild={() => setView("plan")} />
+          {view === "courses" && (
+            hasSemester ? <CoursesPage courseCode={courseCode} setCourseCode={setCourseCode} today={today} />
+              : <NeedUpload onUpload={() => setView("upload")} />
           )}
-          {view === "plan" && (
-            <Plan plan={plan} panicId={panicId} onClearPanic={() => setPanicId(null)}
-              onExport={exportICS} today={today} maxPerDay={maxPerDay} />
+          {view === "planner" && (
+            hasSemester ? (
+              <PlannerPage
+                availabilityProps={{ extraBusy, setExtraBusy, constraints, setConstraints, daysOff, setDaysOff,
+                  maxPerDay, setMaxPerDay, commuteBuffer, setCommuteBuffer, onBuild: () => setView("planner") }}
+                planProps={{ plan, panicId, onClearPanic: () => setPanicId(null), onExport: exportICS, today, maxPerDay }}
+              />
+            ) : <NeedUpload onUpload={() => setView("upload")} />
           )}
-          {view === "course" && <CourseVault course={courseBy(courseCode)} today={today} />}
+          {["notes", "flashcards", "quiz"].includes(view) && (
+            hasSemester ? (
+              <StudyPage mode={view} courseCode={courseCode} setCourseCode={setCourseCode}
+                notes={notes} setNotes={setNotes} />
+            ) : <NeedUpload onUpload={() => setView("upload")} />
+          )}
+          {view === "course" && (
+            !hasSemester
+              ? <NeedUpload onUpload={() => setView("upload")} />
+              : courseBy(courseCode)
+                ? <CourseVault course={courseBy(courseCode)} today={today} />
+                : <Empty title="Course not found" body="This course isn't in the current semester data. Pick one from the left, or upload a fresh syllabus." />
+          )}
         </main>
       </div>
 

@@ -6,17 +6,19 @@ CUNY Course Canvas is an MTA-themed React prototype that turns course syllabi in
 
 We are building an MTA-themed smart syllabus and study planner for CUNY students. The core idea is simple: students upload all their syllabi, Gemini extracts courses, deadlines, policies, and topics, and the app turns the semester into a transit map where each class is a train line and each assignment or exam is a station.
 
-The current path is to make the frontend demo strong first, then connect the backend parser. The frontend already shows the product story: syllabus upload, semester canvas, service advisory collision weeks, availability planning, commute buffers, study plan generation, course policy breakdowns, flashcards, quizzes, and calendar export.
+The current path is a real-upload MTA product experience: the app starts empty, a student uploads actual syllabi, Gemini extracts structured syllabus data once, and the frontend reuses that same course state everywhere.
 
 ## Current Frontend
 
-- MTA-style React UI powered by Vite
-- Multi-syllabus upload wired to a real Gemini backend (falls back to the mock demo semester if you skip the upload)
-- Semester rail map with collision weeks and uncertain-date markers
+- MTA/transit-inspired React UI powered by Vite
+- Real multi-syllabus upload wired to a Gemini backend, with no mock syllabus fallback
+- Friendly quota/rate-limit handling for Gemini `429` responses
+- Semester rail map with course lines, assessment stations, next stop, collision weeks, and uncertain-date markers
 - Availability painter for classes, work, days off, and personal blocks
 - MTA commute buffer so study plans avoid travel time around classes
 - Study plan generator with calendar export
-- Course pages with policies, grading, flashcards, and quizzes
+- Course pages organized into Overview, Schedule, Assignments, Grading, Policies, and Resources
+- Study area for notes upload, flashcards, and quizzes
 
 ## Run Locally
 
@@ -27,9 +29,8 @@ npm run dev
 
 Then open `http://127.0.0.1:5173/`.
 
-The frontend works standalone with mock data ("Use five sample syllabi" on the upload screen). To parse a
-real syllabus with Gemini, also run the backend — see `backend/README.md` for setup (you'll need a
-`GEMINI_API_KEY`, shared separately, never committed). Short version:
+To parse real syllabi with Gemini, run the backend too — see `backend/README.md` for setup. You need a
+`GEMINI_API_KEY`, shared separately and never committed. Short version:
 
 ```bash
 cd backend
