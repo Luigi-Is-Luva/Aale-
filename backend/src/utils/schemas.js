@@ -249,7 +249,7 @@ export const semesterSchema = {
           title: { type: Type.STRING },
           type: {
             type: Type.STRING,
-            enum: ["exam", "quiz", "project", "paper", "homework", "presentation", "other"],
+            enum: ["assignment", "homework", "quiz", "exam", "midterm", "final", "project", "paper", "presentation", "lab", "discussion", "reading_response", "milestone", "participation", "other"],
           },
           dueDate: { type: Type.STRING, description: "ISO YYYY-MM-DD, or omit if the syllabus never gives one." },
           dueTime: { type: Type.STRING, description: "24-hour HH:MM when explicitly stated." },
