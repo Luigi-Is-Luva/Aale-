@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
+import AvatarReminder from "./avatar/AvatarReminder.jsx";
 
 /* ============================================================================
    CUNY COURSE CANVAS
@@ -2560,6 +2561,8 @@ export default function CourseCanvas() {
           )}
         </main>
       </div>
+
+      <AvatarReminder assessments={ASSESSMENTS} />
 
       {ics && (
         <div onClick={() => setIcs(null)}
