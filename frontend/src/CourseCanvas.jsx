@@ -193,7 +193,7 @@ const CSS = `
 const SEMESTER_START = new Date(2026, 7, 24); // Mon Aug 24 2026
 const WEEKS = 16; // 15 instruction weeks + finals
 
-const COURSES = [
+const DEMO_COURSES = [
   {
     code: "CSCI 33500", short: "335", title: "Software Analysis & Design III",
     instructor: "Prof. Adeyemi", color: "#D6352B",
@@ -275,7 +275,7 @@ const COURSES = [
 ];
 
 // dueDate ISO, weightPercent, confidence: explicit | inferred | unknown
-const ASSESSMENTS = [
+const DEMO_ASSESSMENTS = [
   // CSCI 33500
   { id: "a0",  course: "CSCI 33500", title: "Warm-up lab — linked lists", type: "homework", date: "2026-09-03", w: 4, conf: "explicit", hours: 3 },
   { id: "a1",  course: "CSCI 33500", title: "Project 1 — BST implementation", type: "project", date: "2026-09-18", w: 12, conf: "explicit", hours: 8 },
@@ -316,6 +316,12 @@ const ASSESSMENTS = [
   { id: "e5",  course: "ENGL 22000", title: "Seminar participation", type: "other", date: null, w: 20, conf: "unknown", hours: 0 },
   { id: "e4",  course: "ENGL 22000", title: "Final portfolio", type: "paper", date: "2026-12-04", w: 20, conf: "explicit", hours: 9 },
 ];
+
+// Live data the app actually renders. Starts as the demo semester; a real
+// upload in <Upload> reassigns these, and dataVersion (in <CourseCanvas>)
+// forces everything downstream to re-derive from the new values.
+let COURSES = DEMO_COURSES;
+let ASSESSMENTS = DEMO_ASSESSMENTS;
 
 const DEFAULT_CONSTRAINTS = [
   { id: "k1", label: "Shift at the bookstore", days: [2, 4], s: 16, e: 21, kind: "work" },
@@ -588,36 +594,89 @@ const DEMO_FILES = [
   { name: "ENGL220_scan.jpg", size: "2.4 MB", found: "4 assessments · 3 policies · 6 topics" },
 ];
 
-function Upload({ onDone, parsed }) {
+function Upload({ onDone, semesterStart }) {
   const [files, setFiles] = useState([]);
   const [stage, setStage] = useState("idle"); // idle | parsing | done
   const [drag, setDrag] = useState(false);
+  const [isReal, setIsReal] = useState(false);
+  const [error, setError] = useState("");
+  const [warnings, setWarnings] = useState([]);
   const inputRef = useRef(null);
+  const realFilesRef = useRef([]);
 
-  const start = (list) => {
-    const f = list.map((x) => ({ ...x, pct: 0 }));
-    setFiles(f);
+  const startDemo = () => {
+    setIsReal(false);
+    setError("");
+    setWarnings([]);
+    COURSES = DEMO_COURSES;
+    ASSESSMENTS = DEMO_ASSESSMENTS;
+    setFiles(DEMO_FILES.map((x) => ({ ...x, pct: 0 })));
     setStage("parsing");
   };
 
+  const startReal = (fileObjs) => {
+    setIsReal(true);
+    setError("");
+    setWarnings([]);
+    realFilesRef.current = fileObjs;
+    setFiles(fileObjs.map((f) => ({
+      name: f.name,
+      size: `${Math.max(1, Math.round(f.size / 1024))} KB`,
+      found: "reading with Gemini…",
+      pct: 0,
+    })));
+    setStage("parsing");
+  };
+
+  // Cosmetic progress ticker. For the demo path it also fires the completion
+  // itself, exactly as before; for a real upload it caps below 100 and waits
+  // for the actual response (next effect) to finish the job.
   useEffect(() => {
     if (stage !== "parsing") return;
+    const cap = isReal ? 92 : 100;
     const t = setInterval(() => {
       setFiles((prev) => {
-        const next = prev.map((f, i) => ({ ...f, pct: Math.min(100, f.pct + (7 + ((i * 3) % 6))) }));
-        if (next.every((f) => f.pct >= 100)) { clearInterval(t); setTimeout(() => setStage("done"), 350); }
+        const next = prev.map((f, i) => ({ ...f, pct: Math.min(cap, f.pct + (7 + ((i * 3) % 6))) }));
+        if (!isReal && next.every((f) => f.pct >= 100)) {
+          clearInterval(t);
+          setTimeout(() => setStage("done"), 350);
+        }
         return next;
       });
     }, 130);
     return () => clearInterval(t);
-  }, [stage]);
+  }, [stage, isReal]);
+
+  // The real Gemini call, only for genuine uploads.
+  useEffect(() => {
+    if (stage !== "parsing" || !isReal) return;
+    let cancelled = false;
+    askGemini({ files: realFilesRef.current, semesterStart })
+      .then((semester) => {
+        if (cancelled) return;
+        const normalized = normalizeSemester(semester);
+        COURSES = normalized.courses;
+        ASSESSMENTS = normalized.assessments;
+        setWarnings(semester.warnings || []);
+        setFiles((prev) => prev.map((f) => ({
+          ...f, pct: 100,
+          found: `${normalized.courses.length} course(s) · ${normalized.assessments.length} assessments`,
+        })));
+        setTimeout(() => { if (!cancelled) setStage("done"); }, 300);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err.message || "Parsing failed. Try again with fewer or smaller files.");
+        setStage("idle");
+        setFiles([]);
+      });
+    return () => { cancelled = true; };
+  }, [stage, isReal, semesterStart]);
 
   const pickFiles = (e) => {
-    const chosen = Array.from(e.target.files || []).map((f) => ({
-      name: f.name, size: `${Math.max(1, Math.round(f.size / 1024))} KB`,
-      found: "parsing with Gemini…",
-    }));
-    start(chosen.length ? chosen : DEMO_FILES);
+    const chosen = Array.from(e.target.files || []);
+    if (chosen.length) startReal(chosen);
+    else startDemo();
   };
 
   return (
@@ -637,12 +696,17 @@ function Upload({ onDone, parsed }) {
         <div
           onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
           onDragLeave={() => setDrag(false)}
-          onDrop={(e) => { e.preventDefault(); setDrag(false); start(DEMO_FILES); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDrag(false);
+            const dropped = Array.from(e.dataTransfer.files || []);
+            dropped.length ? startReal(dropped) : startDemo();
+          }}
           onClick={() => stage === "idle" && inputRef.current?.click()}
           style={{ border: `2px dashed ${drag ? "var(--signal)" : "var(--bone3)"}`, borderRadius: 8,
                    padding: "44px 26px", textAlign: "center", background: drag ? "rgba(242,193,78,.1)" : "#fff",
                    cursor: stage === "idle" ? "pointer" : "default", transition: ".15s" }}>
-          <input ref={inputRef} type="file" multiple hidden accept=".pdf,.docx,.png,.jpg,.jpeg" onChange={pickFiles} />
+          <input ref={inputRef} type="file" multiple hidden accept=".pdf,.docx,.png,.jpg,.jpeg,.txt" onChange={pickFiles} />
           <div className="d3" style={{ marginBottom: 6 }}>
             {stage === "parsing" ? "Reading your semester" : "Drop your syllabi here"}
           </div>
@@ -652,10 +716,16 @@ function Upload({ onDone, parsed }) {
               : "Or click to browse. Nothing leaves your session."}
           </p>
           {stage === "idle" && (
-            <button className="btn btn-signal" onClick={(e) => { e.stopPropagation(); start(DEMO_FILES); }}>
+            <button className="btn btn-signal" onClick={(e) => { e.stopPropagation(); startDemo(); }}>
               Use five sample syllabi
             </button>
           )}
+        </div>
+      )}
+
+      {error && (
+        <div className="card" style={{ marginTop: 18, borderColor: "var(--alert)", background: "rgba(228,87,46,.06)" }}>
+          <p className="tiny" style={{ color: "#B03A17", margin: 0 }}>{error}</p>
         </div>
       )}
 
@@ -694,11 +764,19 @@ function Upload({ onDone, parsed }) {
             <Stat n={findCollisions(ASSESSMENTS).filter((c) => c.severity !== "normal").length}
                   label="Collision weeks" tone="var(--alert)" />
           </div>
-          <p className="tiny" style={{ color: "#A9A6B4", marginBottom: 18, maxWidth: "60ch" }}>
-            Six dates were written as "TBA" or "week 12" rather than a calendar date. Those are
-            flagged rather than guessed at — you will see a hollow marker on the canvas wherever
-            we are not certain.
-          </p>
+          {isReal && warnings.length > 0 ? (
+            <ul className="tiny" style={{ color: "#A9A6B4", marginBottom: 18, maxWidth: "60ch", paddingLeft: 18 }}>
+              {warnings.map((w, i) => <li key={i} style={{ marginBottom: 4 }}>{w}</li>)}
+            </ul>
+          ) : (
+            <p className="tiny" style={{ color: "#A9A6B4", marginBottom: 18, maxWidth: "60ch" }}>
+              {isReal
+                ? "Structured output guarantees the shape of every field, never the truth of it — check any flagged dates on the canvas."
+                : `Six dates were written as "TBA" or "week 12" rather than a calendar date. Those are
+                   flagged rather than guessed at — you will see a hollow marker on the canvas wherever
+                   we are not certain.`}
+            </p>
+          )}
           <button className="btn btn-signal" onClick={onDone}>Open the semester canvas →</button>
         </div>
       )}
@@ -1348,7 +1426,7 @@ function Flashcards({ cards, color }) {
 function makeCards(course) {
   return course.topics.map((t) => ({
     q: t,
-    a: GENERATED_DEFS[t] || `Gemini writes this definition from the material you upload for ${course.code}.`,
+    a: course.topicDefs?.[t] || GENERATED_DEFS[t] || `Gemini writes this definition from the material you upload for ${course.code}.`,
   }));
 }
 
@@ -1389,7 +1467,10 @@ function Quiz({ course, cards }) {
   const [qi, setQi] = useState(0);
   const [picked, setPicked] = useState(null);
   const [score, setScore] = useState(0);
-  const pool = useMemo(() => Object.entries(GENERATED_DEFS), []);
+  const pool = useMemo(() => {
+    const own = cards.map((c) => [c.q, c.a]);
+    return own.length > 4 ? own : [...own, ...Object.entries(GENERATED_DEFS)];
+  }, [cards]);
   const q = cards[qi % cards.length];
   const options = useMemo(() => {
     const wrong = pool.filter(([k]) => k !== q.q).sort(() => Math.random() - 0.5).slice(0, 3).map(([, v]) => v);
@@ -1639,18 +1720,108 @@ function buildICS(plan) {
 }
 
 /* --------------------------- the Gemini seam -------------------------------
-   The ONLY place this prototype fakes anything. In the real app this posts
-   your files to /api/parse, which calls Gemini with a responseSchema and
-   returns an object shaped exactly like { courses, assessments } above.
-   See parse-route.ts in this repo for the server side.                      */
+   Wired to the Express backend's /api/parse (see backend/src/routes/parse.js
+   and backend/src/controllers/parseController.js), which implements the same
+   contract as parse-route.ts, extended with per-assessment estimatedHours
+   (the scheduler needs a prep-time estimate) and per-topic topicDefinitions
+   (real flashcard answers instead of a placeholder string).                 */
 
-async function askGemini({ files }) {                            // eslint-disable-line
-  // const body = new FormData();
-  // files.forEach((f) => body.append("files", f));
-  // const res = await fetch("/api/parse", { method: "POST", body });
-  // return await res.json();
-  await new Promise((r) => setTimeout(r, 900));
-  return { courses: COURSES, assessments: ASSESSMENTS };
+const API_BASE = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE) || "http://localhost:8080/api";
+
+async function askGemini({ files, semesterStart }) {
+  const body = new FormData();
+  files.forEach((f) => body.append("files", f));
+  body.append("semesterStart", semesterStart);
+  const res = await fetch(`${API_BASE}/parse`, { method: "POST", body });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Parsing failed (${res.status}).`);
+  return data; // { courses, assessments, warnings }
+}
+
+/* --------------------------- normalization ---------------------------------
+   Maps the backend's { courses, assessments } (parse-route.ts field names:
+   courseCode, dueDate, dateConfidence, weightPercent, gradingPolicy[{category,
+   weightPercent, dropsLowest}]) onto the shape every view in this file reads
+   (course.meets/grading/late/attendance, assessment.course/date/w/conf/hours). */
+
+const PALETTE = ["#D6352B", "#1B54B8", "#E07316", "#16904A", "#8E3FA6", "#0E8C8C", "#B8860B", "#6B5B95"];
+const DEFAULT_HOURS = { exam: 10, quiz: 4, project: 9, paper: 8, homework: 4, presentation: 6, other: 3 };
+const DAY_TWO = { su: 0, mo: 1, tu: 2, we: 3, th: 4, fr: 5, sa: 6 };
+const DAY_ONE = { u: 0, m: 1, t: 2, w: 3, r: 4, f: 5, s: 6 };
+
+function shortFromCode(code = "") {
+  const digits = code.replace(/\D/g, "");
+  return digits ? digits.slice(0, 3) : code.slice(0, 3).toUpperCase();
+}
+
+function parseMeetingDays(token = "") {
+  const s = token.replace(/[^a-zA-Z]/g, "");
+  const days = [];
+  let i = 0;
+  while (i < s.length) {
+    const two = s.slice(i, i + 2).toLowerCase();
+    if (DAY_TWO[two] !== undefined) { days.push(DAY_TWO[two]); i += 2; continue; }
+    const one = s[i].toLowerCase();
+    if (DAY_ONE[one] !== undefined) { days.push(DAY_ONE[one]); i += 1; continue; }
+    i += 1;
+  }
+  return days;
+}
+
+function to24(h, ampm) {
+  const hh = h % 12;
+  return ampm === "pm" ? hh + 12 : hh;
+}
+
+// Best-effort parse of freeform strings like "MW 10:00-11:50am" or "TTh 1-2:15pm".
+// Meeting times that don't match a recognizable pattern just yield no blocks —
+// the course still shows up everywhere else, it just won't occupy the planner.
+function parseMeetingTimes(raw = "") {
+  const timeMatch = raw.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*[-–to]+\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (!timeMatch) return [];
+  const [, h1, m1, ap1raw, h2, m2, ap2raw] = timeMatch;
+  const ap2 = (ap2raw || ap1raw || "am").toLowerCase();
+  const ap1 = (ap1raw || ap2).toLowerCase();
+  const start = to24(Number(h1), ap1) + Number(m1 || 0) / 60;
+  let end = to24(Number(h2), ap2) + Number(m2 || 0) / 60;
+  if (end <= start) end += 12;
+  const dayToken = raw.slice(0, timeMatch.index).trim().split(/\s+/)[0] || "";
+  const days = parseMeetingDays(dayToken);
+  return days.map((d) => ({ d, s: Math.floor(start), e: Math.max(Math.floor(start) + 1, Math.ceil(end)) }));
+}
+
+function normalizeSemester(semester) {
+  const courses = (semester.courses || []).map((c, i) => {
+    const topicDefs = {};
+    (c.topicDefinitions || []).forEach(({ topic, definition }) => { topicDefs[topic] = definition; });
+    return {
+      code: c.code,
+      short: shortFromCode(c.code),
+      title: c.title,
+      instructor: c.instructor || "Instructor TBA",
+      color: PALETTE[i % PALETTE.length],
+      meets: parseMeetingTimes(c.meetingTimes || ""),
+      room: c.room || "Room TBA",
+      late: c.latePolicy || "No late policy specified in the syllabus.",
+      attendance: c.attendancePolicy || "No attendance policy specified in the syllabus.",
+      grading: (c.gradingPolicy || []).map((g) => ({ cat: g.category, w: g.weightPercent || 0, drops: !!g.dropsLowest })),
+      topics: c.topics || [],
+      topicDefs,
+    };
+  });
+
+  const assessments = (semester.assessments || []).map((a) => ({
+    id: a.id,
+    course: a.courseCode,
+    title: a.title,
+    type: a.type,
+    date: a.dueDate || null,
+    w: a.weightPercent ?? 0,
+    conf: a.dateConfidence || (a.dueDate ? "explicit" : "unknown"),
+    hours: a.estimatedHours ?? DEFAULT_HOURS[a.type] ?? 4,
+  }));
+
+  return { courses, assessments };
 }
 
 /* --------------------------------- APP ------------------------------------ */
@@ -1666,6 +1837,10 @@ export default function CourseCanvas() {
   const [commuteBuffer, setCommuteBuffer] = useState(1);
   const [panicId, setPanicId] = useState(null);
   const [ics, setIcs] = useState(null);
+  // Bumped whenever Upload reassigns the module-level COURSES/ASSESSMENTS
+  // (real parse or a reset to the demo semester), so memoized derivations
+  // below re-run and every view under <main> gets a fresh mount.
+  const [dataVersion, setDataVersion] = useState(0);
 
   const today = useMemo(() => {
     const t = new Date();
@@ -1674,9 +1849,9 @@ export default function CourseCanvas() {
   }, []);
 
   const availability = useMemo(() => buildAvailability(extraBusy, constraints, daysOff, commuteBuffer),
-    [extraBusy, constraints, daysOff, commuteBuffer]);
+    [extraBusy, constraints, daysOff, commuteBuffer, dataVersion]);
   const plan = useMemo(() => buildPlan({ availability, daysOff, maxPerDay, today, panicId }),
-    [availability, daysOff, maxPerDay, today, panicId]);
+    [availability, daysOff, maxPerDay, today, panicId, dataVersion]);
 
   const exportICS = () => setIcs(buildICS(plan));
   const download = () => {
@@ -1741,8 +1916,13 @@ export default function CourseCanvas() {
           </div>
         </nav>
 
-        <main className="main">
-          {view === "upload" && <Upload onDone={() => setView("canvas")} />}
+        <main className="main" key={dataVersion}>
+          {view === "upload" && (
+            <Upload
+              semesterStart={iso(SEMESTER_START)}
+              onDone={() => { setDataVersion((v) => v + 1); setView("canvas"); }}
+            />
+          )}
           {view === "canvas" && (
             <CanvasView today={today} onExport={exportICS}
               onPanic={(id) => { setPanicId(id); setView("plan"); }} />

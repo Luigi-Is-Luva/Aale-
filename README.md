@@ -11,7 +11,7 @@ The current path is to make the frontend demo strong first, then connect the bac
 ## Current Frontend
 
 - MTA-style React UI powered by Vite
-- Multi-syllabus upload demo with mock Gemini parsing
+- Multi-syllabus upload wired to a real Gemini backend (falls back to the mock demo semester if you skip the upload)
 - Semester rail map with collision weeks and uncertain-date markers
 - Availability painter for classes, work, days off, and personal blocks
 - MTA commute buffer so study plans avoid travel time around classes
@@ -27,6 +27,20 @@ npm run dev
 
 Then open `http://127.0.0.1:5173/`.
 
+The frontend works standalone with mock data ("Use five sample syllabi" on the upload screen). To parse a
+real syllabus with Gemini, also run the backend — see `backend/README.md` for setup (you'll need a
+`GEMINI_API_KEY`, shared separately, never committed). Short version:
+
+```bash
+cd backend
+npm install
+cp .env.example .env   # paste in the shared GEMINI_API_KEY
+npm run dev
+```
+
+The backend listens on `http://localhost:8080` and the frontend's `askGemini()` (in `CourseCanvas.jsx`) is
+already pointed at it.
+
 ## Useful Commands
 
 ```bash
@@ -38,12 +52,14 @@ npm run build
 - `index.html` - Vite entry page
 - `frontend/src/main.jsx` - React mount file
 - `frontend/src/CourseCanvas.jsx` - main MTA-themed frontend
-- `backend/api/parse-route.ts` - Gemini API route reference for backend integration
+- `backend/api/parse-route.ts` - the original Gemini API route reference (kept for context)
+- `backend/` (everything else) - the real Express server implementing that contract, plus `estimatedHours`
+  and `topicDefinitions` extensions the planner and flashcards need. See `backend/README.md`.
 - `docs/team-update.md` - short project update to send teammates
 
 ## Suggested Team Split
 
 - Frontend: polish the MTA interface, interactions, responsive layout, and demo flow
-- Backend/API: turn `backend/api/parse-route.ts` into a real endpoint with Gemini
+- Backend/API: done — real Express + Gemini endpoint at `backend/`, see `backend/README.md`
 - Data model: keep course, assessment, policy, and study-plan fields consistent
 - Presentation: prepare the story around collision weeks, commute-aware planning, and calendar export
