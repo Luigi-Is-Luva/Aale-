@@ -8,6 +8,8 @@ const ALLOWED_MIME_TYPES = new Set([
   "image/heic",
   "image/heif",
   "text/plain",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
 const upload = multer({

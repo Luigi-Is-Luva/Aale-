@@ -7,9 +7,9 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
    Design thesis: the semester as a transit diagram. Courses are lines,
    assessments are stations, collision weeks are service advisories.
 
-   HACKATHON NOTE: every Gemini call in this prototype is stubbed behind
-   `askGemini()` at the bottom of this file. Swap that one function for a
-   fetch to your /api/parse route and the whole app becomes real.
+   Gemini calls go through `askGemini()` at the bottom of this file. The
+   frontend parses once, stores the structured result, and reuses it across
+   Canvas, Courses, Planner, and Study tools.
    ========================================================================== */
 
 /* ----------------------------- design tokens ----------------------------- */
@@ -62,14 +62,17 @@ const CSS = `
   font-size:13px; color:var(--ink); letter-spacing:-.04em; }
 .nav-name { font-family:'Archivo','Helvetica Neue',Arial,sans-serif; font-weight:800; font-size:14px;
   letter-spacing:-.01em; line-height:1.05; }
-.nav-group { display:flex; flex-direction:column; gap:2px; }
+.nav-group { display:flex; flex-direction:column; gap:2px; position:relative; padding-left:8px; }
+.nav-group::before { content:""; position:absolute; left:14px; top:27px; bottom:8px; width:3px;
+  background:linear-gradient(var(--signal), #1B54B8); border-radius:3px; opacity:.55; }
 .nav-label { font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; letter-spacing:.2em;
   text-transform:uppercase; color:#7E7C8E; margin:0 0 8px 8px; }
-.nav-item { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:5px;
+.nav-item { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:999px;
   font-size:14px; font-weight:500; color:#C9C5BC; text-align:left; width:100%; transition:.14s; }
 .nav-item:hover { background:var(--ink2); color:var(--bone); }
 .nav-item[data-on="1"] { background:var(--bone); color:var(--ink); font-weight:700; }
-.nav-tick { width:3px; height:15px; border-radius:2px; background:currentColor; opacity:.35; }
+.nav-tick { width:13px; height:13px; border-radius:50%; border:2px solid currentColor; background:var(--ink); opacity:1; z-index:1; }
+.nav-item[data-on="1"] .nav-tick { background:var(--signal); border-color:var(--ink); }
 .nav-foot { margin-top:auto; border-top:1px solid var(--ink3); padding-top:14px; }
 
 .main { flex:1; min-width:0; max-width:1480px; padding:30px clamp(18px,3.4vw,44px) 70px; }
@@ -117,6 +120,10 @@ const CSS = `
 .station { position:absolute; top:50%; transform:translate(-50%,-50%); z-index:4;
   border-radius:50%; border:2.5px solid var(--ink); background:#fff; transition:.14s; }
 .station:hover, .station[data-on="1"] { transform:translate(-50%,-50%) scale(1.32); border-color:var(--signal); }
+.station[data-type="exam"], .station[data-type="presentation"] { border-radius:3px; }
+.station[data-type="project"], .station[data-type="paper"] { border-radius:35% 35% 50% 50%; }
+.station::after { content:attr(data-label); position:absolute; top:calc(100% + 5px); left:50%; transform:translateX(-50%);
+  font-family:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace; font-size:8px; color:#C9C5BC; white-space:nowrap; }
 .advisory { position:absolute; top:0; bottom:0; z-index:1; border-left:1px dashed rgba(228,87,46,.55);
   border-right:1px dashed rgba(228,87,46,.55);
   background:repeating-linear-gradient(-45deg, rgba(228,87,46,.14) 0 6px, transparent 6px 12px); }
@@ -141,6 +148,16 @@ const CSS = `
   border-radius:6px; padding:14px; }
 .status-tile strong { display:block; font-family:'Archivo','Helvetica Neue',Arial,sans-serif;
   font-size:18px; line-height:1.05; margin:5px 0; }
+.next-stop { background:linear-gradient(135deg, var(--ink), var(--ink2)); color:var(--bone);
+  border-radius:10px; padding:20px; border-left:6px solid var(--signal); }
+.station-tabs { display:flex; align-items:center; gap:0; overflow-x:auto; padding:4px 2px 16px; }
+.station-tab { position:relative; display:flex; align-items:center; gap:8px; padding:8px 16px 8px 0;
+  white-space:nowrap; font-weight:700; font-size:13px; color:var(--muted); }
+.station-tab:not(:last-child)::after { content:""; width:34px; height:3px; background:var(--bone3); margin-left:8px; border-radius:3px; }
+.station-dot { width:16px; height:16px; border-radius:50%; border:2px solid currentColor; background:#fff; flex:0 0 auto; }
+.station-tab[data-on="1"] { color:var(--ink); }
+.station-tab[data-on="1"] .station-dot { background:var(--signal); border-color:var(--ink); }
+.route-card { border-left:5px solid var(--line, var(--ink)); }
 
 /* availability painter */
 .avail { display:grid; grid-template-columns:56px repeat(7,1fr); gap:2px; min-width:600px; }
@@ -181,8 +198,12 @@ const CSS = `
   .nav { width:100%; flex:none; flex-direction:row; align-items:center; gap:14px;
     overflow-x:auto; padding:12px 14px; }
   .nav-group { flex-direction:row; }
+  .nav-group::before { display:none; }
   .nav-label, .nav-foot { display:none; }
   .nav-item { white-space:nowrap; }
+  .main { padding:22px 14px 50px; }
+  .station-tabs { padding-bottom:12px; }
+  .station-tab:not(:last-child)::after { width:18px; }
 }
 `;
 
@@ -221,6 +242,30 @@ const weekStart = (n) => addDays(SEMESTER_START, (n - 1) * 7);
 const courseBy = (code) => COURSES.find((c) => c.code === code);
 
 const TYPE_GLYPH = { exam: "EXAM", project: "PROJ", paper: "PAPER", homework: "HW", quiz: "QUIZ" };
+
+function mergeBy(items, keyFn) {
+  return Array.from(new Map(items.map((item) => [keyFn(item), item])).values());
+}
+
+function saveSemesterState() {
+  try {
+    sessionStorage.setItem("course-canvas-semester", JSON.stringify({ courses: COURSES, assessments: ASSESSMENTS }));
+  } catch { /* session storage may be blocked; parsing still works */ }
+}
+
+function loadSemesterState() {
+  try {
+    const raw = sessionStorage.getItem("course-canvas-semester");
+    if (!raw) return false;
+    const saved = JSON.parse(raw);
+    if (!Array.isArray(saved.courses) || !Array.isArray(saved.assessments)) return false;
+    COURSES = saved.courses;
+    ASSESSMENTS = saved.assessments;
+    return COURSES.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 /* Collision detection — plain TypeScript, no AI needed. This is the insight
    that no single syllabus can give you. */
@@ -367,6 +412,15 @@ function Empty({ title, body, action }) {
   );
 }
 
+function Info({ label, value }) {
+  return (
+    <div className="card-flat">
+      <div className="eyebrow">{label}</div>
+      <p style={{ fontSize: 14, margin: "7px 0 0", lineHeight: 1.45 }}>{value || "Not found in syllabus"}</p>
+    </div>
+  );
+}
+
 /* ------------------------------- 1. LOGIN ---------------------------------- */
 
 function Login({ onEnter }) {
@@ -460,16 +514,21 @@ function Login({ onEnter }) {
 function Upload({ onDone, semesterStart }) {
   const [files, setFiles] = useState([]);
   const [stage, setStage] = useState("idle"); // idle | parsing | done
+  const [loadingStep, setLoadingStep] = useState(0);
   const [drag, setDrag] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(null);
   const [warnings, setWarnings] = useState([]);
   const inputRef = useRef(null);
   const realFilesRef = useRef([]);
+  const inFlightRef = useRef(false);
 
-  const startReal = (fileObjs) => {
-    setError("");
+  const startReal = async (fileObjs = realFilesRef.current) => {
+    if (inFlightRef.current || !fileObjs.length) return;
+    inFlightRef.current = true;
+    setError(null);
     setWarnings([]);
     realFilesRef.current = fileObjs;
+    setLoadingStep(0);
     setFiles(fileObjs.map((f) => ({
       name: f.name,
       size: `${Math.max(1, Math.round(f.size / 1024))} KB`,
@@ -477,6 +536,28 @@ function Upload({ onDone, semesterStart }) {
       pct: 0,
     })));
     setStage("parsing");
+
+    try {
+      const semester = await askGemini({ files: fileObjs, semesterStart });
+      const normalized = normalizeSemester(semester);
+      COURSES = mergeBy([...COURSES, ...normalized.courses], (course) => course.code);
+      ASSESSMENTS = mergeBy([...ASSESSMENTS, ...normalized.assessments], (assessment) =>
+        assessment.id || `${assessment.course}-${assessment.title}-${assessment.date || assessment.dateText || "undated"}`
+      );
+      saveSemesterState();
+      setWarnings(semester.warnings || []);
+      setFiles((prev) => prev.map((f) => ({
+        ...f, pct: 100,
+        found: `${normalized.courses.length} course(s) · ${normalized.assessments.length} assessments`,
+      })));
+      setTimeout(() => setStage("done"), 300);
+    } catch (err) {
+      setError(toFriendlyUploadError(err));
+      setStage("idle");
+      setFiles((prev) => prev.map((f) => ({ ...f, pct: 0, found: "still selected" })));
+    } finally {
+      inFlightRef.current = false;
+    }
   };
 
   // Cosmetic progress ticker. It caps below 100 until the backend finishes.
@@ -491,31 +572,11 @@ function Upload({ onDone, semesterStart }) {
     return () => clearInterval(t);
   }, [stage]);
 
-  // The real Gemini call.
   useEffect(() => {
     if (stage !== "parsing") return;
-    let cancelled = false;
-    askGemini({ files: realFilesRef.current, semesterStart })
-      .then((semester) => {
-        if (cancelled) return;
-        const normalized = normalizeSemester(semester);
-        COURSES = normalized.courses;
-        ASSESSMENTS = normalized.assessments;
-        setWarnings(semester.warnings || []);
-        setFiles((prev) => prev.map((f) => ({
-          ...f, pct: 100,
-          found: `${normalized.courses.length} course(s) · ${normalized.assessments.length} assessments`,
-        })));
-        setTimeout(() => { if (!cancelled) setStage("done"); }, 300);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(err.message || "Parsing failed. Try again with fewer or smaller syllabus files.");
-        setStage("idle");
-        setFiles([]);
-      });
-    return () => { cancelled = true; };
-  }, [stage, semesterStart]);
+    const t = setInterval(() => setLoadingStep((s) => (s + 1) % 5), 1400);
+    return () => clearInterval(t);
+  }, [stage]);
 
   const pickFiles = (e) => {
     const chosen = Array.from(e.target.files || []);
@@ -562,9 +623,28 @@ function Upload({ onDone, semesterStart }) {
         </div>
       )}
 
+      {stage === "parsing" && (
+        <div className="next-stop anim-up" style={{ marginTop: 18 }}>
+          <div className="eyebrow" style={{ color: "var(--signal)", marginBottom: 12 }}>Analysis route</div>
+          {["Finding course information", "Finding important dates", "Checking grading policies", "Mapping assessment stops", "Building your course line"].map((label, i) => (
+            <div key={label} style={{ display: "flex", alignItems: "center", gap: 10, margin: "8px 0" }}>
+              <span className="station-dot" style={{ background: i <= loadingStep ? "var(--signal)" : "transparent", color: i <= loadingStep ? "var(--signal)" : "#777" }} />
+              <span className="mono" style={{ fontSize: 12.5, color: i <= loadingStep ? "var(--bone)" : "#8A8898" }}>
+                {i === loadingStep ? "Mapping your course..." : label}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {error && (
         <div className="card" style={{ marginTop: 18, borderColor: "var(--alert)", background: "rgba(228,87,46,.06)" }}>
-          <p className="tiny" style={{ color: "#B03A17", margin: 0 }}>{error}</p>
+          <div className="eyebrow" style={{ color: "var(--alert)", marginBottom: 6 }}>{error.title}</div>
+          <p style={{ fontSize: 14.5, lineHeight: 1.5, margin: "0 0 12px" }}>{error.message}</p>
+          {error.retryAfter && <p className="tiny" style={{ margin: "0 0 12px" }}>Try again in about {error.retryAfter}.</p>}
+          <button className="btn btn-alert" disabled={stage === "parsing"} onClick={() => startReal()}>
+            {error.code === "GEMINI_RATE_LIMITED" ? "Try Again Later" : "Try Again"}
+          </button>
         </div>
       )}
 
@@ -595,7 +675,7 @@ function Upload({ onDone, semesterStart }) {
 
       {stage === "done" && (
         <div className="panel-dark anim-up" style={{ marginTop: 24 }}>
-          <div className="eyebrow" style={{ color: "var(--signal)" }}>What Gemini extracted</div>
+          <div className="eyebrow" style={{ color: "var(--signal)" }}>Course Line Added</div>
           <div style={{ display: "flex", gap: 34, flexWrap: "wrap", margin: "16px 0 20px" }}>
             <Stat n={COURSES.length} label="Courses" />
             <Stat n={ASSESSMENTS.filter((a) => a.date).length} label="Dated assessments" />
@@ -612,7 +692,11 @@ function Upload({ onDone, semesterStart }) {
               Structured output guarantees the shape of every field, never the truth of it — check any flagged dates on the canvas.
             </p>
           )}
-          <button className="btn btn-signal" onClick={onDone}>Open the semester canvas →</button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn btn-signal" onClick={onDone}>View Semester Canvas →</button>
+            <button className="btn" style={{ background: "#fff", color: "var(--ink)", fontWeight: 700 }}
+              onClick={() => { setStage("idle"); setFiles([]); setWarnings([]); setError(null); }}>Add Another Syllabus</button>
+          </div>
         </div>
       )}
     </div>
@@ -673,6 +757,8 @@ function Rail({ collisions, selected, onSelect, today }) {
                   const on = selected?.id === a.id;
                   return (
                     <button key={a.id} className="station anim-pop" data-on={on ? "1" : "0"}
+                      data-type={a.type}
+                      data-label={TYPE_GLYPH[a.type] || "STOP"}
                       onClick={() => onSelect(on ? null : a)}
                       title={`${a.title} — ${fmtShort(a.date)} — ${a.w}% of grade`}
                       aria-label={`${c.code} ${a.title}, due ${fmtShort(a.date)}, worth ${a.w} percent`}
@@ -736,6 +822,36 @@ function SystemStatus({ collisions, totalHours }) {
   );
 }
 
+function NextStop({ today, onPanic }) {
+  const next = ASSESSMENTS
+    .filter((assessment) => assessment.date && parseISO(assessment.date) >= today)
+    .sort((a, b) => parseISO(a.date) - parseISO(b.date))[0];
+  if (!next) {
+    return <Empty title="No upcoming stops" body="No future dated assessments were found in the uploaded syllabi." />;
+  }
+  const course = courseBy(next.course);
+  const daysAway = Math.max(0, Math.round((parseISO(next.date) - today) / 864e5));
+  return (
+    <div className="next-stop" style={{ marginBottom: 18 }}>
+      <div className="eyebrow" style={{ color: "var(--signal)" }}>Next Stop</div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 18, flexWrap: "wrap", alignItems: "center", marginTop: 12 }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            {course && <Bullet course={course} size="md" />}
+            <span className="chip" style={{ color: "var(--bone)", borderColor: "rgba(255,255,255,.25)" }}>{TYPE_GLYPH[next.type] || "STOP"}</span>
+          </div>
+          <div className="d3" style={{ fontSize: 25 }}>{next.course} · {next.title}</div>
+          <p className="mono tiny" style={{ color: "#C9C5BC", marginTop: 8 }}>
+            {fmtShort(next.date)} · {daysAway === 0 ? "today" : `${daysAway} days away`}
+            {next.w ? ` · ${next.w}% of course grade` : ""}
+          </p>
+        </div>
+        <button className="btn btn-signal" onClick={() => onPanic(next.id)}>Build route around this</button>
+      </div>
+    </div>
+  );
+}
+
 function CanvasView({ today, onExport, onPanic }) {
   const [sel, setSel] = useState(null);
   const collisions = useMemo(() => findCollisions(ASSESSMENTS), []);
@@ -767,6 +883,7 @@ function CanvasView({ today, onExport, onPanic }) {
       </div>
 
       <SystemStatus collisions={collisions} totalHours={totalHours} />
+      <NextStop today={today} onPanic={onPanic} />
 
       <div className="panel-dark" style={{ marginBottom: 18 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
@@ -1365,16 +1482,19 @@ function CourseVault({ course, today }) {
   const [material, setMaterial] = useState([]);
   const [gen, setGen] = useState(false);
   const materialRef = useRef(null);
+  const items = course ? ASSESSMENTS.filter((a) => a.course === course.code) : [];
+  const upcoming = items.filter((a) => !a.date || parseISO(a.date) >= today)
+    .sort((a, b) => (a.date ? parseISO(a.date) : new Date(9999, 0, 1)) - (b.date ? parseISO(b.date) : new Date(9999, 0, 1)));
+  const cards = useMemo(() => makeCards(course), [course?.code]);
+  const decided = items.reduce((s, a) => s + a.w, 0);
+  const next = upcoming.find((a) => a.date);
+
   if (!course) {
     return <Empty title="Pick a course" body="Choose one of your uploaded courses to see policies, deadlines, and study tools." />;
   }
-  const items = ASSESSMENTS.filter((a) => a.course === course.code);
-  const upcoming = items.filter((a) => !a.date || parseISO(a.date) >= today);
-  const cards = useMemo(() => makeCards(course), [course.code]);
-  const decided = items.reduce((s, a) => s + a.w, 0);
 
-  const TABS = [["overview", "Overview"], ["vault", "Material vault"],
-                ["cards", "Flashcards"], ["quiz", "Quiz me"], ["grade", "Grade simulator"]];
+  const TABS = [["overview", "Overview"], ["schedule", "Schedule"], ["assignments", "Assignments"],
+                ["grading", "Grading"], ["policies", "Policies"], ["resources", "Resources"]];
 
   return (
     <div>
@@ -1393,64 +1513,152 @@ function CourseVault({ course, today }) {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
+      <div className="station-tabs">
         {TABS.map(([k, l]) => (
-          <button key={k} className="chip" onClick={() => setTab(k)}
-            style={{ background: tab === k ? course.color : "#fff", color: tab === k ? "#fff" : "var(--ink)",
-                     borderColor: tab === k ? course.color : "var(--bone3)", padding: "6px 12px", fontSize: 11.5 }}>
-            {l.toUpperCase()}
+          <button key={k} className="station-tab" data-on={tab === k ? "1" : "0"} onClick={() => setTab(k)}>
+            <span className="station-dot" style={{ color: tab === k ? course.color : undefined }} />{l}
           </button>
         ))}
       </div>
 
       {tab === "overview" && (
         <div className="grid-2">
-          <div className="card">
-            <div className="eyebrow">Where your grade comes from</div>
-            <div style={{ marginTop: 14 }}>
-              {course.grading.map((g) => (
-                <div key={g.cat} style={{ marginBottom: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                    <span style={{ fontSize: 14, fontWeight: 500 }}>
-                      {g.cat} {g.drops && <span className="chip chip-go" style={{ marginLeft: 6 }}>DROPS LOWEST</span>}
-                    </span>
-                    <span className="mono tiny">{g.w}%</span>
-                  </div>
-                  <div className="bar"><i style={{ width: `${g.w}%`, background: course.color }} /></div>
-                </div>
-              ))}
-            </div>
+          <div className="card route-card" style={{ "--line": course.color }}>
+            <div className="eyebrow">Course header</div>
+            <h3 className="d3" style={{ margin: "10px 0 8px" }}>{course.title}</h3>
+            <p style={{ fontSize: 14.5, lineHeight: 1.55, margin: 0 }}>{course.description || "No course description found in the syllabus."}</p>
             <hr className="rule" />
-            <div className="eyebrow" style={{ marginBottom: 8 }}>Policies, in plain language</div>
-            <p style={{ fontSize: 14, lineHeight: 1.55, margin: "0 0 10px" }}>
-              <strong>Late work.</strong> {course.late}
-            </p>
-            <p style={{ fontSize: 14, lineHeight: 1.55, margin: 0 }}>
-              <strong>Attendance.</strong> {course.attendance}
-            </p>
+            <div className="grid-2">
+              <Info label="Professor" value={course.contact?.name || course.instructor} />
+              <Info label="Email" value={course.contact?.email} />
+              <Info label="Office" value={course.contact?.office} />
+              <Info label="Office Hours" value={course.contact?.officeHoursText} />
+              <Info label="Term" value={[course.semester, course.year].filter(Boolean).join(" ")} />
+              <Info label="Credits" value={course.credits} />
+            </div>
           </div>
           <div className="card">
-            <div className="eyebrow">What is still ahead</div>
-            <div style={{ marginTop: 12 }}>
-              {upcoming.map((a) => (
-                <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-                     gap: 10, padding: "10px 0", borderBottom: "1px solid var(--bone2)" }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 14.5, fontWeight: 500 }}>{a.title}</div>
-                    <div className="mono tiny">
-                      {a.date ? `${fmtShort(a.date)} · ${Math.round((parseISO(a.date) - today) / 864e5)} days out` : "no date given"}
-                    </div>
-                  </div>
-                  <span className="chip" style={{ borderColor: course.color, flex: "0 0 auto" }}>{a.w}%</span>
-                </div>
-              ))}
-            </div>
-            <div className="card-flat" style={{ marginTop: 16 }}>
-              <p className="tiny" style={{ margin: 0 }}>
-                <strong>{decided}%</strong> of this course is still undecided as of today. That is how
-                much leverage you have left here.
+            <div className="eyebrow">Quick route info</div>
+            <div className="card-flat" style={{ marginTop: 12 }}>
+              <div className="eyebrow">Next Stop</div>
+              <div className="d3" style={{ marginTop: 6 }}>{next ? next.title : "No upcoming dated stop"}</div>
+              <p className="mono tiny" style={{ marginTop: 6 }}>
+                {next ? `${fmtShort(next.date)}${next.w ? ` · ${next.w}%` : ""}` : "Upload another syllabus if dates are missing."}
               </p>
             </div>
+            <div className="card-flat" style={{ marginTop: 12 }}>
+              <div className="eyebrow">Meeting</div>
+              <p className="mono tiny" style={{ marginTop: 6 }}>
+                {course.meets.length ? course.meets.map((m) => `${DAYS[m.d]} ${hourLabel(m.s)}–${hourLabel(m.e)}`).join(" · ") : "Meeting time not found in syllabus"}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "schedule" && (
+        <div className="grid-2">
+          <div className="card">
+            <div className="eyebrow">Class stops</div>
+            {course.meets.length ? course.meets.map((m, i) => (
+              <div key={i} className="card-flat" style={{ marginTop: 10 }}>
+                <strong>{m.type || "Class"}</strong>
+                <div className="mono tiny">{DAYS[m.d]} {hourLabel(m.s)}–{hourLabel(m.e)} · {m.location || course.room}</div>
+              </div>
+            )) : <Empty title="No meeting schedule found" body="The planner will not block class time unless the syllabus includes meeting days and times." />}
+          </div>
+          <div className="card">
+            <div className="eyebrow">Weekly schedule</div>
+            {course.weeklySchedule.length ? course.weeklySchedule.map((week, i) => (
+              <div key={i} style={{ padding: "11px 0", borderBottom: "1px solid var(--bone2)" }}>
+                <div className="mono tiny">Week {week.week || i + 1} · {week.dateRange || "date range unavailable"}</div>
+                <strong>{(week.topics || []).join(", ") || "Topics not listed"}</strong>
+                {(week.readings || []).length > 0 && <div className="tiny">Readings: {week.readings.join(", ")}</div>}
+                {(week.assignments || []).length > 0 && <div className="tiny">Assignments: {week.assignments.join(", ")}</div>}
+              </div>
+            )) : <Empty title="No weekly schedule found" body="If the syllabus has no weekly calendar, this section stays empty instead of guessing." />}
+          </div>
+        </div>
+      )}
+
+      {tab === "assignments" && (
+        <div className="card">
+          <div className="eyebrow">Upcoming stops</div>
+          {upcoming.length ? upcoming.map((a) => (
+            <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                 gap: 12, padding: "12px 0", borderBottom: "1px solid var(--bone2)" }}>
+              <div>
+                <div className="mono tiny">{a.date ? fmtShort(a.date) : a.dateText || "date unavailable"}</div>
+                <strong>{a.title}</strong>
+                {(a.description || a.notes) && <p className="tiny" style={{ margin: "4px 0 0" }}>{a.description || a.notes}</p>}
+              </div>
+              <span className="chip" style={{ borderColor: course.color }}>{a.w ? `${a.w}%` : a.points ? `${a.points} pts` : "weight unavailable"}</span>
+            </div>
+          )) : <Empty title="No assignments found" body="No assessments were extracted for this course." />}
+        </div>
+      )}
+
+      {tab === "grading" && (
+        <div className="grid-2">
+          <div className="card">
+            <div className="eyebrow">Grade breakdown</div>
+            {course.grading.length ? course.grading.map((g) => (
+              <div key={g.cat} style={{ marginTop: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{g.cat} {g.drops && <span className="chip chip-go">DROPS LOWEST</span>}</span>
+                  <span className="mono tiny">{g.w ? `${g.w}%` : g.points ? `${g.points} pts` : "weight unavailable"}</span>
+                </div>
+                {g.w ? <div className="bar"><i style={{ width: `${Math.min(100, g.w)}%`, background: course.color }} /></div> : null}
+                {g.notes && <p className="tiny">{g.notes}</p>}
+              </div>
+            )) : <Empty title="No grading breakdown found" body="Gemini did not find a concrete grading breakdown in this syllabus." />}
+            {course.gradingNotes && <p className="tiny" style={{ marginTop: 14 }}>{course.gradingNotes}</p>}
+          </div>
+          <div className="card">
+            <div className="eyebrow">Letter scale</div>
+            {course.gradeScale.length ? course.gradeScale.map((g) => (
+              <div key={g.letter} className="card-flat" style={{ marginTop: 8, display: "flex", justifyContent: "space-between" }}>
+                <strong>{g.letter}</strong><span className="mono tiny">{g.min ?? "?"}–{g.max ?? "?"}</span>
+              </div>
+            )) : <Empty title="No grade scale found" body="No letter-grade scale was listed in the syllabus." />}
+          </div>
+        </div>
+      )}
+
+      {tab === "policies" && (
+        <div className="grid-2">
+          {(course.policies.length ? course.policies : [
+            { category: "Late Work", summary: course.late },
+            { category: "Attendance", summary: course.attendance },
+          ]).map((policy) => (
+            <div key={policy.category} className="card route-card" style={{ "--line": course.color }}>
+              <div className="eyebrow">{policy.category}</div>
+              <p style={{ fontSize: 14.5, lineHeight: 1.55, margin: "8px 0 0" }}>{policy.summary}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === "resources" && (
+        <div className="grid-2">
+          <div className="card">
+            <div className="eyebrow">Course materials</div>
+            {course.materials.length ? course.materials.map((item, i) => (
+              <div key={i} className="card-flat" style={{ marginTop: 8 }}>
+                <strong>{item.type}: {item.name}</strong>
+                {item.details && <p className="tiny" style={{ margin: "4px 0 0" }}>{item.details}</p>}
+              </div>
+            )) : <Empty title="No required materials found" body="No textbook, software, platform, or equipment requirements were extracted." />}
+          </div>
+          <div className="card">
+            <div className="eyebrow">Important links</div>
+            {course.links.length ? course.links.map((link) => (
+              <a key={link.url} href={link.url} target="_blank" rel="noreferrer" className="card-flat"
+                style={{ display: "block", marginTop: 8, color: "var(--ink)", textDecoration: "none" }}>
+                <strong>{link.label}</strong>
+                <div className="mono tiny">{link.url}</div>
+              </a>
+            )) : <Empty title="No links found" body="Only valid links from the syllabus appear here." />}
           </div>
         </div>
       )}
@@ -1590,13 +1798,59 @@ function buildICS(plan) {
 
 const API_BASE = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE) || "http://localhost:8080/api";
 
+function toFriendlyUploadError(err) {
+  if (err?.code === "NETWORK_FAILURE") {
+    return {
+      code: "NETWORK_FAILURE",
+      title: "Connection Interrupted",
+      message: "Check your connection and try again.",
+    };
+  }
+
+  if (err?.status === 429 || err?.code === "GEMINI_RATE_LIMITED" || /429|RESOURCE_EXHAUSTED|quota|rate.?limit/i.test(err?.raw || err?.message || "")) {
+    return {
+      code: "GEMINI_RATE_LIMITED",
+      title: "Service Delay",
+      message: "Gemini traffic is currently high. Course Canvas couldn't analyze your syllabus because the AI service has reached its current request limit. Your uploaded file is still here.",
+      retryAfter: err?.retryAfter || null,
+    };
+  }
+
+  if (err?.status === 400 || err?.code === "INVALID_DOCUMENT") {
+    return {
+      code: "INVALID_DOCUMENT",
+      title: "We couldn't read this syllabus.",
+      message: "Try another PDF or make sure the file contains readable syllabus content.",
+    };
+  }
+
+  return {
+    code: "SIGNAL_PROBLEM",
+    title: "Signal Problem",
+    message: "Something went wrong while analyzing your syllabus.",
+  };
+}
+
 async function askGemini({ files, semesterStart }) {
   const body = new FormData();
   files.forEach((f) => body.append("files", f));
   body.append("semesterStart", semesterStart);
-  const res = await fetch(`${API_BASE}/parse`, { method: "POST", body });
+  let res;
+  try {
+    res = await fetch(`${API_BASE}/parse`, { method: "POST", body });
+  } catch (err) {
+    throw Object.assign(new Error("Network request failed."), { code: "NETWORK_FAILURE", raw: err?.message });
+  }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Parsing failed (${res.status}).`);
+  if (!res.ok) {
+    throw Object.assign(new Error(data.message || data.error || `Parsing failed (${res.status}).`), {
+      status: res.status,
+      code: data.code,
+      title: data.title,
+      retryAfter: data.retryAfter,
+      raw: JSON.stringify(data),
+    });
+  }
   return data; // { courses, assessments, warnings }
 }
 
@@ -1610,6 +1864,8 @@ const PALETTE = ["#D6352B", "#1B54B8", "#E07316", "#16904A", "#8E3FA6", "#0E8C8C
 const DEFAULT_HOURS = { exam: 10, quiz: 4, project: 9, paper: 8, homework: 4, presentation: 6, other: 3 };
 const DAY_TWO = { su: 0, mo: 1, tu: 2, we: 3, th: 4, fr: 5, sa: 6 };
 const DAY_ONE = { u: 0, m: 1, t: 2, w: 3, r: 4, f: 5, s: 6 };
+const DAY_NAME = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
+  sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
 
 function shortFromCode(code = "") {
   const digits = code.replace(/\D/g, "");
@@ -1635,6 +1891,12 @@ function to24(h, ampm) {
   return ampm === "pm" ? hh + 12 : hh;
 }
 
+function hourFromClock(clock = "") {
+  const match = String(clock).match(/^(\d{1,2})(?::(\d{2}))?/);
+  if (!match) return null;
+  return Number(match[1]) + Number(match[2] || 0) / 60;
+}
+
 // Best-effort parse of freeform strings like "MW 10:00-11:50am" or "TTh 1-2:15pm".
 // Meeting times that don't match a recognizable pattern just yield no blocks —
 // the course still shows up everywhere else, it just won't occupy the planner.
@@ -1652,21 +1914,59 @@ function parseMeetingTimes(raw = "") {
   return days.map((d) => ({ d, s: Math.floor(start), e: Math.max(Math.floor(start) + 1, Math.ceil(end)) }));
 }
 
+function normalizeMeetings(course) {
+  const structured = (course.meetings || []).flatMap((meeting) => {
+    const start = hourFromClock(meeting.startTime);
+    const end = hourFromClock(meeting.endTime);
+    if (start === null || end === null) return [];
+    return (meeting.days || []).flatMap((day) => {
+      const d = DAY_NAME[String(day).toLowerCase()];
+      return d === undefined ? [] : [{
+        d,
+        s: Math.floor(start),
+        e: Math.max(Math.floor(start) + 1, Math.ceil(end)),
+        type: meeting.type,
+        location: meeting.location,
+        modality: meeting.modality,
+      }];
+    });
+  });
+  return structured.length ? structured : parseMeetingTimes(course.meetingTimes || "");
+}
+
 function normalizeSemester(semester) {
   const courses = (semester.courses || []).map((c, i) => {
     const topicDefs = {};
     (c.topicDefinitions || []).forEach(({ topic, definition }) => { topicDefs[topic] = definition; });
+    const contact = c.instructorContact || {};
+    const meetings = normalizeMeetings(c);
     return {
       code: c.code,
       short: shortFromCode(c.code),
       title: c.title || c.code || "Untitled course",
       instructor: c.instructor || "Instructor not found in syllabus",
-      color: PALETTE[i % PALETTE.length],
-      meets: parseMeetingTimes(c.meetingTimes || ""),
-      room: c.room || "Room not found in syllabus",
+      contact,
+      section: c.section,
+      semester: c.semester,
+      year: c.year,
+      department: c.department,
+      credits: c.credits,
+      color: PALETTE[(COURSES.length + i) % PALETTE.length],
+      meets: meetings,
+      meetingText: c.meetingTimes,
+      room: c.room || meetings.find((m) => m.location)?.location || "Room not found in syllabus",
+      description: c.description,
+      objectives: c.learningObjectives || [],
+      skills: c.skills || [],
       late: c.latePolicy || "No late policy found in the syllabus.",
       attendance: c.attendancePolicy || "No attendance policy found in the syllabus.",
-      grading: (c.gradingPolicy || []).map((g) => ({ cat: g.category || "Unlabeled grading item", w: g.weightPercent ?? 0, drops: !!g.dropsLowest })),
+      grading: (c.gradingPolicy || []).map((g) => ({ cat: g.category || "Unlabeled grading item", w: g.weightPercent ?? 0, points: g.points, notes: g.notes, drops: !!g.dropsLowest })),
+      gradeScale: c.gradeScale || [],
+      gradingNotes: c.gradingNotes,
+      policies: c.policies || [],
+      materials: c.materials || [],
+      links: (c.links || []).filter((link) => /^https?:\/\//i.test(link.url || "")),
+      weeklySchedule: c.weeklySchedule || [],
       topics: c.topics || [],
       topicDefs,
     };
@@ -1678,7 +1978,13 @@ function normalizeSemester(semester) {
     title: a.title,
     type: a.type,
     date: a.dueDate || null,
+    dueTime: a.dueTime,
+    originalDateText: a.originalDateText,
+    dateText: a.dateText,
     w: a.weightPercent ?? 0,
+    points: a.points,
+    description: a.description,
+    notes: a.notes,
     conf: a.dateConfidence || (a.dueDate ? "explicit" : "unknown"),
     hours: a.estimatedHours ?? DEFAULT_HOURS[a.type] ?? 4,
   }));
@@ -1828,6 +2134,11 @@ export default function CourseCanvas() {
   // Bumped whenever Upload reassigns the module-level COURSES/ASSESSMENTS, so
   // memoized derivations below re-run and every view under <main> gets a fresh mount.
   const [dataVersion, setDataVersion] = useState(0);
+
+  useEffect(() => {
+    if (COURSES.length) return;
+    if (loadSemesterState()) setDataVersion((v) => v + 1);
+  }, []);
 
   const today = useMemo(() => {
     const t = new Date();
