@@ -34,6 +34,7 @@ const CSS = `
   color: var(--ink);
   background: var(--bone);
   min-height: 100vh;
+  overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
 }
 .cc *, .cc *::before, .cc *::after { box-sizing: border-box; }
@@ -71,7 +72,7 @@ const CSS = `
 .nav-tick { width:3px; height:15px; border-radius:2px; background:currentColor; opacity:.35; }
 .nav-foot { margin-top:auto; border-top:1px solid var(--ink3); padding-top:14px; }
 
-.main { flex:1; min-width:0; padding:30px clamp(18px,3.4vw,44px) 70px; }
+.main { flex:1; min-width:0; max-width:1480px; padding:30px clamp(18px,3.4vw,44px) 70px; }
 .head { display:flex; justify-content:space-between; align-items:flex-end; gap:20px;
   flex-wrap:wrap; margin-bottom:26px; }
 
@@ -135,6 +136,11 @@ const CSS = `
 .bar > i { display:block; height:100%; border-radius:4px; }
 .grid-2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; align-items:start; }
 .stat-n { font-family:'Archivo','Helvetica Neue',Arial,sans-serif; font-weight:900; font-size:30px; letter-spacing:-.03em; line-height:1; }
+.status-strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px; margin-bottom:18px; }
+.status-tile { background:#fff; border:1px solid var(--bone2); border-left:4px solid var(--signal);
+  border-radius:6px; padding:14px; }
+.status-tile strong { display:block; font-family:'Archivo','Helvetica Neue',Arial,sans-serif;
+  font-size:18px; line-height:1.05; margin:5px 0; }
 
 /* availability painter */
 .avail { display:grid; grid-template-columns:56px repeat(7,1fr); gap:2px; min-width:600px; }
@@ -145,6 +151,8 @@ const CSS = `
 .slot { height:22px; border-radius:2px; background:#fff; border:1px solid var(--bone2);
   transition:background .1s; cursor:pointer; }
 .slot[data-s="busy"] { background:var(--ink3); border-color:var(--ink3); cursor:not-allowed; }
+.slot[data-s="commute"] { background:repeating-linear-gradient(45deg, var(--signal) 0 5px, #FFE4A1 5px 10px);
+  border-color:#D9A93A; cursor:not-allowed; }
 .slot[data-s="off"] { background:var(--bone3); border-color:var(--bone3); }
 .slot[data-s="free"]:hover { background:rgba(242,193,78,.4); }
 .slot[data-s="study"] { background:var(--signal); border-color:#D9A93A; }
@@ -368,12 +376,22 @@ function findCollisions(assessments) {
 
 const LEAD_DAYS = { exam: 16, project: 14, paper: 12, homework: 7, quiz: 5 };
 
-function buildAvailability(extraBusy, constraints, daysOff) {
+function buildAvailability(extraBusy, constraints, daysOff, commuteBuffer = 1) {
   const map = {};
   HOURS.forEach((h) => DAYS.forEach((_, d) => { map[`${d}-${h}`] = "free"; }));
   COURSES.forEach((c) =>
     c.meets.forEach((m) => {
       for (let h = m.s; h < m.e; h++) map[`${m.d}-${h}`] = "class";
+    })
+  );
+  COURSES.forEach((c) =>
+    c.meets.forEach((m) => {
+      for (let offset = 1; offset <= commuteBuffer; offset++) {
+        const before = m.s - offset;
+        const after = m.e + offset - 1;
+        if (HOURS.includes(before) && map[`${m.d}-${before}`] === "free") map[`${m.d}-${before}`] = "commute";
+        if (HOURS.includes(after) && map[`${m.d}-${after}`] === "free") map[`${m.d}-${after}`] = "commute";
+      }
     })
   );
   constraints.forEach((k) =>
@@ -779,6 +797,32 @@ function Forecast({ collisions }) {
   );
 }
 
+function SystemStatus({ collisions, totalHours }) {
+  const severe = collisions.filter((c) => c.severity === "severe").length;
+  const heavy = collisions.filter((c) => c.severity === "heavy").length;
+  const uncertain = ASSESSMENTS.filter((a) => a.conf !== "explicit").length;
+
+  return (
+    <div className="status-strip">
+      <div className="status-tile">
+        <div className="eyebrow">Service advisories</div>
+        <strong>{severe} critical · {heavy} heavy</strong>
+        <p className="tiny" style={{ margin: 0 }}>Collision weeks are flagged like transit delays.</p>
+      </div>
+      <div className="status-tile" style={{ borderLeftColor: "var(--go)" }}>
+        <div className="eyebrow">Prep budget</div>
+        <strong>{totalHours} study hours</strong>
+        <p className="tiny" style={{ margin: 0 }}>Generated from assessment weight and difficulty.</p>
+      </div>
+      <div className="status-tile" style={{ borderLeftColor: "var(--alert)" }}>
+        <div className="eyebrow">Needs confirmation</div>
+        <strong>{uncertain} fuzzy dates</strong>
+        <p className="tiny" style={{ margin: 0 }}>Inferred and unknown dates stay visibly marked.</p>
+      </div>
+    </div>
+  );
+}
+
 function CanvasView({ today, onExport, onPanic }) {
   const [sel, setSel] = useState(null);
   const collisions = useMemo(() => findCollisions(ASSESSMENTS), []);
@@ -808,6 +852,8 @@ function CanvasView({ today, onExport, onPanic }) {
         <Stat n={`${totalHours}h`} label="Prep hours ahead" />
         <Stat n={ASSESSMENTS.filter((a) => a.conf !== "explicit").length} label="Uncertain dates" tone="#8A6510" />
       </div>
+
+      <SystemStatus collisions={collisions} totalHours={totalHours} />
 
       <div className="panel-dark" style={{ marginBottom: 18 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
@@ -914,11 +960,11 @@ function CanvasView({ today, onExport, onPanic }) {
 /* ---------------------------- 4. AVAILABILITY ------------------------------ */
 
 function Availability({ extraBusy, setExtraBusy, constraints, setConstraints, daysOff, setDaysOff,
-                        maxPerDay, setMaxPerDay, onBuild }) {
+                        maxPerDay, setMaxPerDay, commuteBuffer, setCommuteBuffer, onBuild }) {
   const [paint, setPaint] = useState(null);
   const [form, setForm] = useState({ label: "", days: [], s: 17, e: 20 });
-  const avail = useMemo(() => buildAvailability(extraBusy, constraints, daysOff),
-                        [extraBusy, constraints, daysOff]);
+  const avail = useMemo(() => buildAvailability(extraBusy, constraints, daysOff, commuteBuffer),
+                        [extraBusy, constraints, daysOff, commuteBuffer]);
 
   const toggle = (d, h) => {
     const k = `${d}-${h}`;
@@ -967,7 +1013,7 @@ function Availability({ extraBusy, setExtraBusy, constraints, setConstraints, da
                   <div key={k} className="slot" data-s={s}
                     onMouseDown={() => { setPaint(true); toggle(d, h); }}
                     onMouseEnter={() => paint && toggle(d, h)}
-                    title={cls ? `${cls.code} · ${cls.room}` : s === "off" ? "Day off" : s === "busy" ? "Blocked" : "Free"}
+                    title={cls ? `${cls.code} · ${cls.room}` : s === "commute" ? "Commute buffer" : s === "off" ? "Day off" : s === "busy" ? "Blocked" : "Free"}
                     style={cls ? { background: cls.color, borderColor: cls.color } : undefined} />
                 );
               })}
@@ -975,7 +1021,7 @@ function Availability({ extraBusy, setExtraBusy, constraints, setConstraints, da
           ))}
         </div>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 14 }}>
-          {[["#fff", "Free"], ["var(--ink3)", "Blocked"], ["var(--bone3)", "Day off"], ["#D6352B", "Class"]].map(([c, l]) => (
+          {[["#fff", "Free"], ["var(--ink3)", "Blocked"], ["var(--signal)", "Commute buffer"], ["var(--bone3)", "Day off"], ["#D6352B", "Class"]].map(([c, l]) => (
             <span key={l} className="tiny" style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <i style={{ width: 12, height: 12, borderRadius: 2, background: c, border: "1px solid var(--bone3)" }} />{l}
             </span>
@@ -1047,6 +1093,22 @@ function Availability({ extraBusy, setExtraBusy, constraints, setConstraints, da
             </div>
           </div>
           <hr className="rule" />
+          <div className="card-flat" style={{ marginBottom: 16 }}>
+            <div className="eyebrow" style={{ marginBottom: 6 }}>MTA buffer</div>
+            <p className="tiny" style={{ marginBottom: 12 }}>
+              Protect travel time around every class, so the planner does not schedule a
+              study block when you need to get across campus or across boroughs.
+            </p>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <input type="range" min="0" max="2" value={commuteBuffer}
+                onChange={(e) => setCommuteBuffer(+e.target.value)}
+                style={{ flex: 1, accentColor: "var(--signal)" }} />
+              <div style={{ width: 88, textAlign: "right" }}>
+                <span className="stat-n" style={{ fontSize: 26 }}>{commuteBuffer}</span>
+                <span className="mono tiny"> hr buffer</span>
+              </div>
+            </div>
+          </div>
           <div className="card-flat" style={{ marginBottom: 16 }}>
             <div className="eyebrow" style={{ marginBottom: 6 }}>Reality check</div>
             <p style={{ fontSize: 14, lineHeight: 1.5, margin: 0 }}>
@@ -1601,6 +1663,7 @@ export default function CourseCanvas() {
   const [constraints, setConstraints] = useState(DEFAULT_CONSTRAINTS);
   const [daysOff, setDaysOff] = useState([0]);
   const [maxPerDay, setMaxPerDay] = useState(4);
+  const [commuteBuffer, setCommuteBuffer] = useState(1);
   const [panicId, setPanicId] = useState(null);
   const [ics, setIcs] = useState(null);
 
@@ -1610,8 +1673,8 @@ export default function CourseCanvas() {
     return t < SEMESTER_START ? SEMESTER_START : t;
   }, []);
 
-  const availability = useMemo(() => buildAvailability(extraBusy, constraints, daysOff),
-    [extraBusy, constraints, daysOff]);
+  const availability = useMemo(() => buildAvailability(extraBusy, constraints, daysOff, commuteBuffer),
+    [extraBusy, constraints, daysOff, commuteBuffer]);
   const plan = useMemo(() => buildPlan({ availability, daysOff, maxPerDay, today, panicId }),
     [availability, daysOff, maxPerDay, today, panicId]);
 
@@ -1687,7 +1750,7 @@ export default function CourseCanvas() {
           {view === "policies" && <Policies />}
           {view === "availability" && (
             <Availability {...{ extraBusy, setExtraBusy, constraints, setConstraints, daysOff, setDaysOff,
-              maxPerDay, setMaxPerDay }} onBuild={() => setView("plan")} />
+              maxPerDay, setMaxPerDay, commuteBuffer, setCommuteBuffer }} onBuild={() => setView("plan")} />
           )}
           {view === "plan" && (
             <Plan plan={plan} panicId={panicId} onClearPanic={() => setPanicId(null)}
