@@ -9,7 +9,7 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 
    Gemini calls go through `askGemini()` at the bottom of this file. The
    frontend parses once, stores the structured result, and reuses it across
-   Canvas, Courses, Planner, and Study tools.
+   Canvas, Courses, Schedule, and Study tools.
    ========================================================================== */
 
 /* ----------------------------- design tokens ----------------------------- */
@@ -158,6 +158,17 @@ const CSS = `
 .station-tab[data-on="1"] { color:var(--ink); }
 .station-tab[data-on="1"] .station-dot { background:var(--signal); border-color:var(--ink); }
 .route-card { border-left:5px solid var(--line, var(--ink)); }
+.schedule-grid { display:grid; grid-template-columns:repeat(7,minmax(190px,1fr)); gap:12px; overflow-x:auto; padding-bottom:8px; }
+.day-card { min-width:190px; background:#fff; border:1px solid var(--bone2); border-radius:10px; padding:14px; }
+.day-card[data-today="1"] { border-color:var(--signal); box-shadow:0 0 0 3px rgba(242,193,78,.2); }
+.timeline { display:flex; flex-direction:column; gap:8px; margin-top:12px; }
+.event-row { display:grid; grid-template-columns:54px 1fr auto; gap:9px; align-items:start;
+  padding:9px 0; border-bottom:1px solid var(--bone2); }
+.event-dot { width:13px; height:13px; border-radius:50%; background:var(--line, var(--ink)); margin-top:3px; box-shadow:0 0 0 3px #fff, 0 0 0 5px var(--line, var(--ink)); }
+.deadline-row { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-top:1px dashed var(--bone2); }
+.form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+.field { display:flex; flex-direction:column; gap:5px; }
+.field input, .field select, .field textarea { width:100%; padding:9px 10px; border:1px solid var(--bone3); border-radius:6px; background:#fff; }
 
 /* availability painter */
 .avail { display:grid; grid-template-columns:56px repeat(7,1fr); gap:2px; min-width:600px; }
@@ -204,6 +215,10 @@ const CSS = `
   .main { padding:22px 14px 50px; }
   .station-tabs { padding-bottom:12px; }
   .station-tab:not(:last-child)::after { width:18px; }
+  .schedule-grid { grid-template-columns:1fr; overflow:visible; }
+  .day-card { min-width:0; }
+  .event-row { grid-template-columns:48px 1fr; }
+  .event-row .chip { grid-column:2; justify-self:start; }
 }
 `;
 
@@ -233,6 +248,9 @@ const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); r
 const fmtShort = (s) => parseISO(s).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 const fmtLong = (d) => d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 const hourLabel = (h) => `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? "am" : "pm"}`;
+const timeLabel = (clock) => clock ? new Date(`2026-01-01T${clock}`).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "";
+const startOfWeek = (d) => addDays(d, -d.getDay());
+const sameISO = (date, isoStr) => iso(date) === isoStr;
 
 const weekOf = (isoStr) => {
   const diff = Math.floor((parseISO(isoStr) - SEMESTER_START) / 864e5);
@@ -241,7 +259,21 @@ const weekOf = (isoStr) => {
 const weekStart = (n) => addDays(SEMESTER_START, (n - 1) * 7);
 const courseBy = (code) => COURSES.find((c) => c.code === code);
 
-const TYPE_GLYPH = { exam: "EXAM", project: "PROJ", paper: "PAPER", homework: "HW", quiz: "QUIZ" };
+const TYPE_GLYPH = {
+  assignment: "ASN", homework: "HW", quiz: "QUIZ", exam: "EXAM", midterm: "MID",
+  final: "FINAL", project: "PROJ", paper: "PAPER", presentation: "PRES", lab: "LAB",
+  discussion: "DISC", reading_response: "READ", milestone: "MILE", participation: "PART", other: "STOP",
+};
+const ACADEMIC_TYPES = Object.keys(TYPE_GLYPH);
+const ACTIVITY_TYPES = ["work", "gym", "commute", "club", "appointment", "personal", "study", "unavailable", "other"];
+const ACTIVITY_LABELS = {
+  work: "Work", gym: "Gym", commute: "Commute", club: "Club", appointment: "Appointment",
+  personal: "Personal", study: "Study", unavailable: "Unavailable", other: "Other",
+};
+const ACTIVITY_COLORS = {
+  work: "#2C2D3C", gym: "#2E9E6B", commute: "#F2C14E", club: "#8E3FA6",
+  appointment: "#1B54B8", personal: "#0E8C8C", study: "#D6352B", unavailable: "#6E6C7C", other: "#E07316",
+};
 
 function mergeBy(items, keyFn) {
   return Array.from(new Map(items.map((item) => [keyFn(item), item])).values());
@@ -251,6 +283,10 @@ function saveSemesterState() {
   try {
     sessionStorage.setItem("course-canvas-semester", JSON.stringify({ courses: COURSES, assessments: ASSESSMENTS }));
   } catch { /* session storage may be blocked; parsing still works */ }
+}
+
+function touchSemesterState() {
+  saveSemesterState();
 }
 
 function loadSemesterState() {
@@ -1136,7 +1172,7 @@ function Availability({ extraBusy, setExtraBusy, constraints, setConstraints, da
           <div className="card-flat" style={{ marginBottom: 16 }}>
             <div className="eyebrow" style={{ marginBottom: 6 }}>MTA buffer</div>
             <p className="tiny" style={{ marginBottom: 12 }}>
-              Protect travel time around every class, so the planner does not schedule a
+              Protect travel time around every class, so the schedule does not place a
               study block when you need to get across campus or across boroughs.
             </p>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
@@ -1565,7 +1601,7 @@ function CourseVault({ course, today }) {
                 <strong>{m.type || "Class"}</strong>
                 <div className="mono tiny">{DAYS[m.d]} {hourLabel(m.s)}–{hourLabel(m.e)} · {m.location || course.room}</div>
               </div>
-            )) : <Empty title="No meeting schedule found" body="The planner will not block class time unless the syllabus includes meeting days and times." />}
+            )) : <Empty title="No meeting schedule found" body="The schedule will not block class time unless the syllabus includes meeting days and times." />}
           </div>
           <div className="card">
             <div className="eyebrow">Weekly schedule</div>
@@ -1584,7 +1620,7 @@ function CourseVault({ course, today }) {
       {tab === "assignments" && (
         <div className="card">
           <div className="eyebrow">Upcoming stops</div>
-          {upcoming.length ? upcoming.map((a) => (
+          {(items.length ? upcoming : []).length ? upcoming.map((a) => (
             <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
                  gap: 12, padding: "12px 0", borderBottom: "1px solid var(--bone2)" }}>
               <div>
@@ -1592,9 +1628,16 @@ function CourseVault({ course, today }) {
                 <strong>{a.title}</strong>
                 {(a.description || a.notes) && <p className="tiny" style={{ margin: "4px 0 0" }}>{a.description || a.notes}</p>}
               </div>
-              <span className="chip" style={{ borderColor: course.color }}>{a.w ? `${a.w}%` : a.points ? `${a.points} pts` : "weight unavailable"}</span>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                {a.edited && <span className="chip chip-warn">Edited by you</span>}
+                <span className="chip" style={{ borderColor: course.color }}>{a.w ? `${a.w}%` : a.points ? `${a.points} pts` : "weight unavailable"}</span>
+              </div>
             </div>
-          )) : <Empty title="No assignments found" body="No assessments were extracted for this course." />}
+          )) : (
+            items.length
+              ? <Empty title="No upcoming stops" body="All extracted assessment stops for this course are before today." />
+              : <Empty title="No assessment stops found" body="We found the course information, but no assignments or exams were detected. Use Schedule → Add Deadline to add one manually." />
+          )}
         </div>
       )}
 
@@ -1689,7 +1732,7 @@ function CourseVault({ course, today }) {
             </div>
           </div>
           {material.length === 0 ? (
-            <Empty title="The vault is empty" body={`Nothing uploaded for ${course.code} yet. Add slides or notes and the flashcards below stop being generic.`} />
+            <Empty title="The vault is empty" body={`Nothing uploaded for ${course.code} yet. Add slides or notes before generating study tools.`} />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {material.map((m, i) => (
@@ -1899,7 +1942,7 @@ function hourFromClock(clock = "") {
 
 // Best-effort parse of freeform strings like "MW 10:00-11:50am" or "TTh 1-2:15pm".
 // Meeting times that don't match a recognizable pattern just yield no blocks —
-// the course still shows up everywhere else, it just won't occupy the planner.
+// the course still shows up everywhere else, it just won't occupy the schedule.
 function parseMeetingTimes(raw = "") {
   const timeMatch = raw.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*[-–to]+\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
   if (!timeMatch) return [];
@@ -1996,7 +2039,7 @@ function NeedUpload({ onUpload }) {
   return (
     <Empty
       title="Upload a syllabus first"
-      body="Canvas, Courses, Planner, Flashcards, and Quiz stay locked until Gemini successfully reads a real syllabus file."
+      body="Canvas, Courses, Schedule, Flashcards, and Quiz stay locked until Gemini successfully reads a real syllabus file."
       action={<button className="btn btn-signal" onClick={onUpload}>Go to syllabus upload</button>}
     />
   );
@@ -2027,19 +2070,233 @@ function CoursesPage({ courseCode, setCourseCode, today }) {
   );
 }
 
-function PlannerPage(props) {
+const blankActivity = () => ({ id: "", label: "", kind: "work", days: [1], s: 9, e: 10, notes: "" });
+const blankDeadline = () => ({ id: "", course: COURSES[0]?.code || "", title: "", type: "assignment", date: "", dueTime: "", w: "", points: "", notes: "" });
+
+function SchedulePage({ today, plan, constraints, setConstraints, maxPerDay, setMaxPerDay, commuteBuffer, setCommuteBuffer,
+                        onAddAssessment, onUpdateAssessment, onDeleteAssessment, onUpdateMeeting, onExport }) {
+  const [activity, setActivity] = useState(blankActivity);
+  const [editingActivityId, setEditingActivityId] = useState(null);
+  const [deadline, setDeadline] = useState(blankDeadline);
+  const [editingDeadlineId, setEditingDeadlineId] = useState(null);
+  const [meetingEdit, setMeetingEdit] = useState(null);
+  const [filters, setFilters] = useState({ classes: true, deadlines: true, personal: true, study: true });
+  const weekStartDate = startOfWeek(today);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(weekStartDate, i));
+  const datedAssessments = ASSESSMENTS.filter((a) => a.date);
+
+  const submitActivity = (e) => {
+    e.preventDefault();
+    if (!activity.label || !activity.days.length || activity.e <= activity.s) return;
+    const item = { ...activity, id: editingActivityId || `activity-${Date.now()}` };
+    setConstraints((prev) => editingActivityId ? prev.map((x) => x.id === editingActivityId ? item : x) : [...prev, item]);
+    setEditingActivityId(null);
+    setActivity(blankActivity());
+  };
+
+  const editActivity = (item) => {
+    setEditingActivityId(item.id);
+    setActivity({ ...blankActivity(), ...item });
+  };
+
+  const submitDeadline = (e) => {
+    e.preventDefault();
+    if (!deadline.course || !deadline.title) return;
+    const item = {
+      id: editingDeadlineId || `manual-${Date.now()}`,
+      course: deadline.course,
+      title: deadline.title,
+      type: deadline.type,
+      date: deadline.date || null,
+      dueTime: deadline.dueTime || null,
+      w: deadline.w === "" ? 0 : Number(deadline.w),
+      points: deadline.points === "" ? null : Number(deadline.points),
+      notes: deadline.notes,
+      description: deadline.notes,
+      conf: deadline.date ? "explicit" : "unknown",
+      hours: DEFAULT_HOURS[deadline.type] || 4,
+      source: editingDeadlineId ? "edited" : "manual",
+      edited: true,
+    };
+    editingDeadlineId ? onUpdateAssessment(editingDeadlineId, item) : onAddAssessment(item);
+    setEditingDeadlineId(null);
+    setDeadline(blankDeadline());
+  };
+
+  const editDeadline = (item) => {
+    setEditingDeadlineId(item.id);
+    setDeadline({
+      ...blankDeadline(),
+      id: item.id,
+      course: item.course,
+      title: item.title,
+      type: item.type,
+      date: item.date || "",
+      dueTime: item.dueTime || "",
+      w: item.w || "",
+      points: item.points || "",
+      notes: item.notes || item.description || "",
+    });
+  };
+
+  const classBlocksForDay = (day) => COURSES.flatMap((course) =>
+    course.meets.map((meeting, index) => ({ ...meeting, index, course, label: `${course.code} ${meeting.type || "Class"}`, source: "syllabus" }))
+  ).filter((event) => event.d === day.getDay());
+
+  const activityBlocksForDay = (day) => constraints
+    .filter((item) => item.days?.includes(day.getDay()))
+    .map((item) => ({ ...item, label: item.label, course: null, source: "manual" }));
+
+  const studyBlocksForDay = (day) => (plan.days.find((item) => sameISO(item.date, iso(day)))?.blocks || [])
+    .map((block, index) => ({ id: `study-${iso(day)}-${index}`, label: `Study: ${block.a.title}`, s: block.s, e: block.e, kind: "study", course: courseBy(block.a.course), source: "generated" }));
+
+  const deadlinesForDay = (day) => datedAssessments
+    .filter((item) => sameISO(day, item.date))
+    .sort((a, b) => (a.dueTime || "23:59").localeCompare(b.dueTime || "23:59"));
+
   return (
     <div>
       <div className="head">
         <div>
-          <div className="eyebrow">Semester / Planner</div>
-          <h2 className="d2" style={{ margin: "8px 0 6px" }}>My week, availability, and study route</h2>
-          <p className="lede">Class blocks come from your syllabi. Personal time, commute buffers, and study blocks come from your choices.</p>
+          <div className="eyebrow">Semester / Schedule</div>
+          <h2 className="d2" style={{ margin: "8px 0 6px" }}>What do I actually have this week?</h2>
+          <p className="lede">Classes and deadlines come from your syllabi. Work, gym, commute, personal time, and study blocks are editable by you.</p>
+        </div>
+        <button className="btn btn-ghost" onClick={onExport}>Export to calendar (.ics)</button>
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="eyebrow" style={{ marginBottom: 10 }}>Show</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {Object.entries({ classes: "Classes", deadlines: "Deadlines", personal: "Personal", study: "Study" }).map(([key, label]) => (
+            <button key={key} className={`chip ${filters[key] ? "chip-go" : ""}`} onClick={() => setFilters((prev) => ({ ...prev, [key]: !prev[key] }))}>
+              {filters[key] ? "✓" : "○"} {label}
+            </button>
+          ))}
         </div>
       </div>
-      <Availability {...props.availabilityProps} />
-      <div style={{ height: 22 }} />
-      <Plan {...props.planProps} />
+
+      <div className="schedule-grid" style={{ marginBottom: 18 }}>
+        {days.map((day) => {
+          const classes = filters.classes ? classBlocksForDay(day) : [];
+          const activities = filters.personal ? activityBlocksForDay(day) : [];
+          const studies = filters.study ? studyBlocksForDay(day) : [];
+          const blocks = [...classes, ...activities, ...studies].sort((a, b) => a.s - b.s);
+          const deadlines = filters.deadlines ? deadlinesForDay(day) : [];
+          return (
+            <div key={iso(day)} className="day-card" data-today={sameISO(day, iso(today)) ? "1" : "0"}>
+              <div className="eyebrow">{fmtLong(day)}</div>
+              <div className="timeline">
+                {blocks.length === 0 && <p className="tiny" style={{ margin: 0 }}>No time blocks.</p>}
+                {blocks.map((event, index) => {
+                  const color = event.course?.color || ACTIVITY_COLORS[event.kind] || ACTIVITY_COLORS.other;
+                  return (
+                    <div key={`${event.id || event.course?.code}-${index}`} className="event-row" style={{ "--line": color }}>
+                      <span className="mono tiny">{hourLabel(event.s)}</span>
+                      <div>
+                        <span className="event-dot" style={{ "--line": color }} />
+                        <strong style={{ display: "block", marginTop: -16, marginLeft: 24 }}>{event.label}</strong>
+                        <div className="tiny" style={{ marginLeft: 24 }}>
+                          {hourLabel(event.s)}–{hourLabel(event.e)} · {event.source === "syllabus" ? "From syllabus" : ACTIVITY_LABELS[event.kind] || "Event"}
+                        </div>
+                      </div>
+                      {event.source === "syllabus" ? (
+                        <button className="chip" onClick={() => setMeetingEdit({ courseCode: event.course.code, index: event.index, ...event })}>Edit</button>
+                      ) : event.source === "manual" ? (
+                        <button className="chip" onClick={() => editActivity(event)}>Edit</button>
+                      ) : <span className="chip">Study</span>}
+                    </div>
+                  );
+                })}
+                {deadlines.length > 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <div className="eyebrow">Due Today</div>
+                    {deadlines.map((item) => {
+                      const course = courseBy(item.course);
+                      return (
+                        <div key={item.id} className="deadline-row">
+                          {course && <Bullet course={course} size="sm" />}
+                          <div style={{ flex: 1 }}>
+                            <strong>{item.title}</strong>
+                            <div className="tiny">{item.course} · {TYPE_GLYPH[item.type] || item.type}{item.dueTime ? ` · ${timeLabel(item.dueTime)}` : ""}</div>
+                          </div>
+                          <button className="chip" onClick={() => editDeadline(item)}>Edit</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {meetingEdit && (
+        <form className="card route-card" style={{ "--line": courseBy(meetingEdit.courseCode)?.color, marginBottom: 16 }} onSubmit={(e) => {
+          e.preventDefault();
+          onUpdateMeeting(meetingEdit.courseCode, meetingEdit.index, meetingEdit);
+          setMeetingEdit(null);
+        }}>
+          <div className="eyebrow">Correct syllabus class time</div>
+          <div className="form-grid" style={{ marginTop: 12 }}>
+            <label className="field"><span className="tiny">Day</span><select value={meetingEdit.d} onChange={(e) => setMeetingEdit({ ...meetingEdit, d: Number(e.target.value) })}>{DAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}</select></label>
+            <label className="field"><span className="tiny">Start</span><input type="number" min="0" max="23" value={meetingEdit.s} onChange={(e) => setMeetingEdit({ ...meetingEdit, s: Number(e.target.value) })} /></label>
+            <label className="field"><span className="tiny">End</span><input type="number" min="1" max="24" value={meetingEdit.e} onChange={(e) => setMeetingEdit({ ...meetingEdit, e: Number(e.target.value) })} /></label>
+            <label className="field"><span className="tiny">Location</span><input value={meetingEdit.location || ""} onChange={(e) => setMeetingEdit({ ...meetingEdit, location: e.target.value })} /></label>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}><button className="btn btn-primary">Save class correction</button><button type="button" className="btn btn-ghost" onClick={() => setMeetingEdit(null)}>Cancel</button></div>
+        </form>
+      )}
+
+      <div className="grid-2">
+        <form className="card" onSubmit={submitActivity}>
+          <div className="eyebrow">{editingActivityId ? "Edit Activity" : "+ Add Activity"}</div>
+          <div className="form-grid" style={{ marginTop: 12 }}>
+            <label className="field"><span className="tiny">Activity name</span><input value={activity.label} onChange={(e) => setActivity({ ...activity, label: e.target.value })} placeholder="Gym, work, commute..." /></label>
+            <label className="field"><span className="tiny">Category</span><select value={activity.kind} onChange={(e) => setActivity({ ...activity, kind: e.target.value })}>{ACTIVITY_TYPES.map((type) => <option key={type} value={type}>{ACTIVITY_LABELS[type]}</option>)}</select></label>
+            <label className="field"><span className="tiny">Start hour</span><input type="number" min="0" max="23" value={activity.s} onChange={(e) => setActivity({ ...activity, s: Number(e.target.value) })} /></label>
+            <label className="field"><span className="tiny">End hour</span><input type="number" min="1" max="24" value={activity.e} onChange={(e) => setActivity({ ...activity, e: Number(e.target.value) })} /></label>
+          </div>
+          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 12 }}>
+            {DAYS.map((day, i) => (
+              <button type="button" key={day} className={`chip ${activity.days.includes(i) ? "chip-go" : ""}`}
+                onClick={() => setActivity((prev) => ({ ...prev, days: prev.days.includes(i) ? prev.days.filter((d) => d !== i) : [...prev.days, i] }))}>{day}</button>
+            ))}
+          </div>
+          <label className="field" style={{ marginTop: 12 }}><span className="tiny">Notes optional</span><textarea value={activity.notes || ""} onChange={(e) => setActivity({ ...activity, notes: e.target.value })} /></label>
+          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            <button className="btn btn-primary">{editingActivityId ? "Save activity" : "Add activity"}</button>
+            {editingActivityId && <button type="button" className="btn btn-ghost" onClick={() => { setConstraints((prev) => prev.filter((x) => x.id !== editingActivityId)); setEditingActivityId(null); setActivity(blankActivity()); }}>Delete</button>}
+            {editingActivityId && <button type="button" className="btn btn-signal" onClick={() => { setConstraints((prev) => [...prev, { ...activity, id: `activity-${Date.now()}`, label: `${activity.label} copy` }]); setEditingActivityId(null); setActivity(blankActivity()); }}>Duplicate</button>}
+          </div>
+        </form>
+
+        <form className="card" onSubmit={submitDeadline}>
+          <div className="eyebrow">{editingDeadlineId ? "Edit Deadline" : "+ Add Deadline"}</div>
+          <div className="form-grid" style={{ marginTop: 12 }}>
+            <label className="field"><span className="tiny">Course</span><select value={deadline.course} onChange={(e) => setDeadline({ ...deadline, course: e.target.value })}>{COURSES.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}</select></label>
+            <label className="field"><span className="tiny">Title</span><input value={deadline.title} onChange={(e) => setDeadline({ ...deadline, title: e.target.value })} placeholder="Homework 4" /></label>
+            <label className="field"><span className="tiny">Type</span><select value={deadline.type} onChange={(e) => setDeadline({ ...deadline, type: e.target.value })}>{ACADEMIC_TYPES.map((type) => <option key={type} value={type}>{TYPE_GLYPH[type]} · {type.replace("_", " ")}</option>)}</select></label>
+            <label className="field"><span className="tiny">Date</span><input type="date" value={deadline.date} onChange={(e) => setDeadline({ ...deadline, date: e.target.value })} /></label>
+            <label className="field"><span className="tiny">Due time</span><input type="time" value={deadline.dueTime} onChange={(e) => setDeadline({ ...deadline, dueTime: e.target.value })} /></label>
+            <label className="field"><span className="tiny">Weight % optional</span><input type="number" min="0" max="100" value={deadline.w} onChange={(e) => setDeadline({ ...deadline, w: e.target.value })} /></label>
+          </div>
+          <label className="field" style={{ marginTop: 12 }}><span className="tiny">Notes optional</span><textarea value={deadline.notes} onChange={(e) => setDeadline({ ...deadline, notes: e.target.value })} /></label>
+          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            <button className="btn btn-primary">{editingDeadlineId ? "Save deadline" : "Add deadline"}</button>
+            {editingDeadlineId && <button type="button" className="btn btn-ghost" onClick={() => { onDeleteAssessment(editingDeadlineId); setEditingDeadlineId(null); setDeadline(blankDeadline()); }}>Delete</button>}
+          </div>
+        </form>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="eyebrow">Availability settings</div>
+        <div className="form-grid" style={{ marginTop: 12 }}>
+          <label className="field"><span className="tiny">Commute buffer around classes</span><input type="number" min="0" max="2" value={commuteBuffer} onChange={(e) => setCommuteBuffer(Number(e.target.value))} /></label>
+          <label className="field"><span className="tiny">Max generated study hours/day</span><input type="number" min="1" max="8" value={maxPerDay} onChange={(e) => setMaxPerDay(Number(e.target.value))} /></label>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2152,6 +2409,28 @@ export default function CourseCanvas() {
     [availability, daysOff, maxPerDay, today, panicId, dataVersion]);
 
   const exportICS = () => setIcs(buildICS(plan));
+  const refreshSemester = () => {
+    saveSemesterState();
+    setDataVersion((v) => v + 1);
+  };
+  const addAssessment = (assessment) => {
+    ASSESSMENTS = mergeBy([...ASSESSMENTS, assessment], (item) => item.id);
+    refreshSemester();
+  };
+  const updateAssessment = (id, patch) => {
+    ASSESSMENTS = ASSESSMENTS.map((item) => item.id === id ? { ...item, ...patch, id, edited: true, source: patch.source || item.source || "edited" } : item);
+    refreshSemester();
+  };
+  const deleteAssessment = (id) => {
+    ASSESSMENTS = ASSESSMENTS.filter((item) => item.id !== id);
+    refreshSemester();
+  };
+  const updateMeeting = (courseCode, index, meeting) => {
+    COURSES = COURSES.map((course) => course.code === courseCode
+      ? { ...course, meets: course.meets.map((item, i) => i === index ? { d: meeting.d, s: meeting.s, e: meeting.e, type: meeting.type, location: meeting.location, modality: meeting.modality, edited: true } : item) }
+      : course);
+    refreshSemester();
+  };
   const download = () => {
     try {
       const blob = new Blob([ics], { type: "text/calendar" });
@@ -2166,7 +2445,7 @@ export default function CourseCanvas() {
   const hasSemester = COURSES.length > 0;
 
   const NAV = [
-    ["Semester", [["upload", "Syllabus"], ["canvas", "Canvas"], ["courses", "Courses"], ["planner", "Planner"]]],
+    ["Semester", [["upload", "Syllabus"], ["canvas", "Canvas"], ["courses", "Courses"], ["schedule", "Schedule"]]],
     ["Study", [["notes", "Notes"], ["flashcards", "Flashcards"], ["quiz", "Quiz"]]],
   ];
 
@@ -2200,7 +2479,7 @@ export default function CourseCanvas() {
                 onClick={() => { setView("course"); setCourseCode(c.code); }}>
                 <Bullet course={c} size="sm" />
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {c.code.split(" ")[0]} {c.code.split(" ")[1].slice(0, 3)}
+                  {c.code.split(" ")[0]} {(c.code.split(" ")[1] || c.short || "").slice(0, 3)}
                 </span>
               </button>
             ))}
@@ -2225,19 +2504,29 @@ export default function CourseCanvas() {
           {view === "canvas" && (
             hasSemester ? (
               <CanvasView today={today} onExport={exportICS}
-                onPanic={(id) => { setPanicId(id); setView("planner"); }} />
+                onPanic={(id) => { setPanicId(id); setView("schedule"); }} />
             ) : <NeedUpload onUpload={() => setView("upload")} />
           )}
           {view === "courses" && (
             hasSemester ? <CoursesPage courseCode={courseCode} setCourseCode={setCourseCode} today={today} />
               : <NeedUpload onUpload={() => setView("upload")} />
           )}
-          {view === "planner" && (
+          {view === "schedule" && (
             hasSemester ? (
-              <PlannerPage
-                availabilityProps={{ extraBusy, setExtraBusy, constraints, setConstraints, daysOff, setDaysOff,
-                  maxPerDay, setMaxPerDay, commuteBuffer, setCommuteBuffer, onBuild: () => setView("planner") }}
-                planProps={{ plan, panicId, onClearPanic: () => setPanicId(null), onExport: exportICS, today, maxPerDay }}
+              <SchedulePage
+                today={today}
+                plan={plan}
+                constraints={constraints}
+                setConstraints={setConstraints}
+                maxPerDay={maxPerDay}
+                setMaxPerDay={setMaxPerDay}
+                commuteBuffer={commuteBuffer}
+                setCommuteBuffer={setCommuteBuffer}
+                onAddAssessment={addAssessment}
+                onUpdateAssessment={updateAssessment}
+                onDeleteAssessment={deleteAssessment}
+                onUpdateMeeting={updateMeeting}
+                onExport={exportICS}
               />
             ) : <NeedUpload onUpload={() => setView("upload")} />
           )}

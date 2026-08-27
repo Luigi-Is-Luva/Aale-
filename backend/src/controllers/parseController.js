@@ -23,6 +23,10 @@ function validate(semester) {
     warnings.push(`${inferred.length} date(s) were worked out from week numbers rather than printed dates.`);
   }
 
+  if (!semester.assessments.length) {
+    warnings.push("No assessment stops were extracted. Check whether the syllabus includes a readable calendar, grading table, or assignment list.");
+  }
+
   const orphans = semester.assessments.filter((a) => !semester.courses.some((c) => c.code === a.courseCode));
   if (orphans.length) {
     warnings.push(`${orphans.length} assessment(s) reference a course we did not extract.`);

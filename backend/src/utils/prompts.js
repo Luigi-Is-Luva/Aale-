@@ -38,32 +38,38 @@ Rules that matter:
    - If you resolve from a relative but concrete reference, set dateConfidence to "inferred".
    - Never hallucinate a precise date.
 
-5. Assessments/events: extract assignments, homework, quizzes, exams, midterms, finals, projects, papers,
+5. Assessment extraction is mandatory. Return every identifiable graded or explicitly scheduled academic item in the
+   top-level assessments array. Do not leave assessments only inside weeklySchedule, gradingPolicy, or notes.
+   Extract assignments, homework, quizzes, exams, midterms, finals, projects, papers,
    presentations, labs, discussion posts, reading deadlines, milestones, no-class dates, breaks, and review sessions
    when explicitly scheduled.
 
-6. Weights are shares of the FINAL COURSE GRADE. If a syllabus says "Exams: 40%, two midterms equally weighted", each
+6. For every assessment, include title, type, courseCode, dateConfidence, estimatedHours, and any available dueDate,
+   dueTime, originalDateText, dateText, weightPercent, points, description, or notes. If a concrete due date is not
+   present, still return the item with dueDate omitted and preserve the vague wording in dateText/originalDateText.
+
+7. Weights are shares of the FINAL COURSE GRADE. If a syllabus says "Exams: 40%, two midterms equally weighted", each
    midterm is 20, not 40. If individual items cannot be separated, omit weightPercent and capture the category in
    gradingPolicy instead.
 
-7. Grading: extract categories, percentages, point systems, drop-lowest rules, minimum requirements, extra credit,
+8. Grading: extract categories, percentages, point systems, drop-lowest rules, minimum requirements, extra credit,
    grading notes, and letter grade scale only if present. Do not force gradingPolicy to sum to 100; reproduce the syllabus.
 
-8. Policies: categorize concrete policies into Attendance, Late Work, Missing Work, Makeup Exams, Academic Integrity,
+9. Policies: categorize concrete policies into Attendance, Late Work, Missing Work, Makeup Exams, Academic Integrity,
    AI / Generative AI, Collaboration, Participation, Extra Credit, Extensions, Accessibility, Communication, Technology,
    Classroom Conduct, Recording, Submission Requirements, or Other Important Policies. Summarize concise rules and keep
    exact numbers/deadlines. Do not dump giant raw syllabus paragraphs.
 
-9. Materials/resources: extract required textbooks, software, websites/platforms, equipment, calculators, required
+10. Materials/resources: extract required textbooks, software, websites/platforms, equipment, calculators, required
    accounts, course tools, and valid important links.
 
-10. Weekly schedule: extract week number, date range, topics, readings, and assignments from weekly tables/calendars
+11. Weekly schedule: extract week number, date range, topics, readings, and assignments from weekly tables/calendars
     when present.
 
-11. topics should be concepts, not week labels. "Red-black trees", not "Week 6 reading". For each topic, also write a
+12. topics should be concepts, not week labels. "Red-black trees", not "Week 6 reading". For each topic, also write a
    one or two sentence, exam-useful definition in topicDefinitions, in the same order as topics.
 
-12. estimatedHours is your realistic estimate of total prep time a student should budget for that single assessment,
+13. estimatedHours is your realistic estimate of total prep time a student should budget for that single assessment,
    given its type and weight (a 5% homework might be 2-4 hours; a 25% final exam might be 12-16 hours).
 
 Extract nothing that is not in the documents.`;

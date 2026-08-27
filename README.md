@@ -4,7 +4,7 @@ CUNY Course Canvas is an MTA-themed React prototype that turns course syllabi in
 
 ## Project Direction
 
-We are building an MTA-themed smart syllabus and study planner for CUNY students. The core idea is simple: students upload all their syllabi, Gemini extracts courses, deadlines, policies, and topics, and the app turns the semester into a transit map where each class is a train line and each assignment or exam is a station.
+We are building an MTA-themed smart syllabus and schedule planner for CUNY students. The core idea is simple: students upload all their syllabi, Gemini extracts courses, deadlines, policies, and topics, and the app turns the semester into a transit map where each class is a train line and each assignment or exam is a station.
 
 The current path is a real-upload MTA product experience: the app starts empty, a student uploads actual syllabi, Gemini extracts structured syllabus data once, and the frontend reuses that same course state everywhere.
 
@@ -55,7 +55,7 @@ npm run build
 - `frontend/src/CourseCanvas.jsx` - main MTA-themed frontend
 - `backend/api/parse-route.ts` - the original Gemini API route reference (kept for context)
 - `backend/` (everything else) - the real Express server implementing that contract, plus `estimatedHours`
-  and `topicDefinitions` extensions the planner and flashcards need. See `backend/README.md`.
+  and `topicDefinitions` extensions the schedule and flashcards need. See `backend/README.md`.
 - `docs/team-update.md` - short project update to send teammates
 
 ## Suggested Team Split
