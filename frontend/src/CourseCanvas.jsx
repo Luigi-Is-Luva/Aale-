@@ -193,141 +193,12 @@ const CSS = `
 const SEMESTER_START = new Date(2026, 7, 24); // Mon Aug 24 2026
 const WEEKS = 16; // 15 instruction weeks + finals
 
-const DEMO_COURSES = [
-  {
-    code: "CSCI 33500", short: "335", title: "Software Analysis & Design III",
-    instructor: "Prof. Adeyemi", color: "#D6352B",
-    meets: [{ d: 1, s: 10, e: 12 }, { d: 3, s: 10, e: 12 }],
-    room: "Hunter North 1001B",
-    late: "10% off per day, no submissions after 72 hours.",
-    attendance: "Two unexcused absences allowed. Third drops you a letter grade.",
-    grading: [
-      { cat: "Projects", w: 35, drops: false },
-      { cat: "Midterms", w: 40, drops: true },
-      { cat: "Final exam", w: 25, drops: false },
-    ],
-    topics: ["Amortized analysis", "Red-black trees", "Hash collision strategies",
-             "Graph traversal", "Dynamic programming", "Big-O vs Big-Theta"],
-  },
-  {
-    code: "CSCI 26000", short: "260", title: "Computer Architecture",
-    instructor: "Prof. Nakamura", color: "#1B54B8",
-    meets: [{ d: 2, s: 13, e: 15 }, { d: 4, s: 13, e: 15 }],
-    room: "Hunter West 615",
-    late: "No late labs. Ever. One drop granted at semester's end.",
-    attendance: "Lab attendance is graded. Lecture is not.",
-    grading: [
-      { cat: "Labs", w: 30, drops: true },
-      { cat: "Midterm", w: 25, drops: false },
-      { cat: "Lab practical", w: 15, drops: false },
-      { cat: "Final exam", w: 30, drops: false },
-    ],
-    topics: ["Pipelining hazards", "Cache associativity", "Two's complement",
-             "MIPS addressing modes", "Amdahl's Law", "Branch prediction"],
-  },
-  {
-    code: "ECO 20100", short: "201", title: "Intermediate Microeconomics",
-    instructor: "Prof. Okonkwo", color: "#E07316",
-    meets: [{ d: 1, s: 14, e: 15 }, { d: 3, s: 14, e: 15 }, { d: 5, s: 14, e: 15 }],
-    room: "Hunter East 714",
-    late: "Problem sets accepted up to 24 hours late for half credit.",
-    attendance: "Not tracked, but exam questions come from lecture only.",
-    grading: [
-      { cat: "Problem sets", w: 20, drops: true },
-      { cat: "Midterm 1", w: 20, drops: false },
-      { cat: "Midterm 2", w: 20, drops: false },
-      { cat: "Final exam", w: 40, drops: false },
-    ],
-    topics: ["Marginal rate of substitution", "Deadweight loss", "Nash equilibrium",
-             "Price elasticity", "Consumer surplus", "Isoquants and returns to scale"],
-  },
-  {
-    code: "MATH 15000", short: "150", title: "Discrete Structures",
-    instructor: "Prof. Vasquez", color: "#16904A",
-    meets: [{ d: 2, s: 9, e: 10 }, { d: 4, s: 9, e: 10 }],
-    room: "Hunter North 424",
-    late: "Homework is due at 11:59pm. Gradescope closes. No exceptions.",
-    attendance: "Optional, but quizzes are given in person without warning.",
-    grading: [
-      { cat: "Homework", w: 25, drops: true },
-      { cat: "Pop quizzes", w: 10, drops: true },
-      { cat: "Midterm", w: 25, drops: false },
-      { cat: "Final exam", w: 40, drops: false },
-    ],
-    topics: ["Proof by induction", "Pigeonhole principle", "Equivalence relations",
-             "Generating functions", "Graph coloring", "Recurrence relations"],
-  },
-  {
-    code: "ENGL 22000", short: "220", title: "Writing About Literature",
-    instructor: "Prof. Hollis", color: "#8E3FA6",
-    meets: [{ d: 5, s: 10, e: 13 }],
-    room: "Hunter West 222",
-    late: "Half a letter grade per day. Extensions granted if asked 48h ahead.",
-    attendance: "Seminar. Three absences and you cannot pass.",
-    grading: [
-      { cat: "Essays", w: 60, drops: false },
-      { cat: "Seminar participation", w: 20, drops: false },
-      { cat: "Final portfolio", w: 20, drops: false },
-    ],
-    topics: ["Close reading", "Thesis architecture", "Free indirect discourse",
-             "Citation ethics", "Counterargument framing", "Revision as re-seeing"],
-  },
-];
+// Live data the app actually renders. It starts empty on purpose: no academic
+// screens use fake courses, fake dates, or backup mock schedules.
+let COURSES = [];
+let ASSESSMENTS = [];
 
-// dueDate ISO, weightPercent, confidence: explicit | inferred | unknown
-const DEMO_ASSESSMENTS = [
-  // CSCI 33500
-  { id: "a0",  course: "CSCI 33500", title: "Warm-up lab — linked lists", type: "homework", date: "2026-09-03", w: 4, conf: "explicit", hours: 3 },
-  { id: "a1",  course: "CSCI 33500", title: "Project 1 — BST implementation", type: "project", date: "2026-09-18", w: 12, conf: "explicit", hours: 8 },
-  { id: "a2",  course: "CSCI 33500", title: "Midterm 1", type: "exam", date: "2026-10-14", w: 19, conf: "explicit", hours: 10 },
-  { id: "a3",  course: "CSCI 33500", title: "Project 2 — graph library", type: "project", date: "2026-10-30", w: 12, conf: "explicit", hours: 9 },
-  { id: "a4",  course: "CSCI 33500", title: "Midterm 2", type: "exam", date: "2026-11-11", w: 19, conf: "explicit", hours: 10 },
-  { id: "a6",  course: "CSCI 33500", title: "Project 3 — topic TBA", type: "project", date: null, w: 9, conf: "unknown", hours: 8 },
-  { id: "a5",  course: "CSCI 33500", title: "Final exam", type: "exam", date: "2026-12-09", w: 25, conf: "inferred", hours: 14 },
-  // CSCI 26000
-  { id: "b0",  course: "CSCI 26000", title: "Lab 1 — bit manipulation", type: "homework", date: "2026-09-04", w: 6, conf: "explicit", hours: 4 },
-  { id: "b1",  course: "CSCI 26000", title: "Lab 3 — datapath simulation", type: "homework", date: "2026-10-01", w: 8, conf: "explicit", hours: 5 },
-  { id: "b2",  course: "CSCI 26000", title: "Midterm", type: "exam", date: "2026-10-15", w: 25, conf: "explicit", hours: 11 },
-  { id: "b3",  course: "CSCI 26000", title: "Lab 6 — cache profiling", type: "homework", date: "2026-11-05", w: 8, conf: "explicit", hours: 5 },
-  { id: "b4",  course: "CSCI 26000", title: "Lab practical", type: "exam", date: "2026-11-12", w: 15, conf: "explicit", hours: 8 },
-  { id: "b6",  course: "CSCI 26000", title: "Lab 8 — pipeline hazards", type: "homework", date: "2026-11-24", w: 8, conf: "explicit", hours: 5 },
-  { id: "b5",  course: "CSCI 26000", title: "Final exam", type: "exam", date: "2026-12-11", w: 30, conf: "inferred", hours: 14 },
-  // ECO 20100
-  { id: "c0",  course: "ECO 20100", title: "Problem set 1", type: "homework", date: "2026-09-08", w: 5, conf: "explicit", hours: 4 },
-  { id: "c1",  course: "ECO 20100", title: "Problem set 2", type: "homework", date: "2026-09-25", w: 5, conf: "explicit", hours: 4 },
-  { id: "c2",  course: "ECO 20100", title: "Midterm 1", type: "exam", date: "2026-10-12", w: 20, conf: "explicit", hours: 10 },
-  { id: "c3",  course: "ECO 20100", title: "Problem set 5", type: "homework", date: "2026-11-06", w: 5, conf: "explicit", hours: 4 },
-  { id: "c4",  course: "ECO 20100", title: "Midterm 2", type: "exam", date: "2026-11-13", w: 20, conf: "explicit", hours: 10 },
-  { id: "c6",  course: "ECO 20100", title: "Problem set 7", type: "homework", date: "2026-11-20", w: 5, conf: "explicit", hours: 4 },
-  { id: "c5",  course: "ECO 20100", title: "Final exam", type: "exam", date: "2026-12-08", w: 40, conf: "inferred", hours: 16 },
-  // MATH 15000
-  { id: "d0",  course: "MATH 15000", title: "Homework 1 — propositional logic", type: "homework", date: "2026-09-03", w: 5, conf: "explicit", hours: 3 },
-  { id: "d1",  course: "MATH 15000", title: "Induction problem set", type: "homework", date: "2026-09-17", w: 6, conf: "explicit", hours: 4 },
-  { id: "d2",  course: "MATH 15000", title: "Midterm", type: "exam", date: "2026-10-15", w: 25, conf: "explicit", hours: 11 },
-  { id: "d5",  course: "MATH 15000", title: "Pop quizzes (unannounced)", type: "quiz", date: null, w: 10, conf: "unknown", hours: 5 },
-  { id: "d3",  course: "MATH 15000", title: "Graph theory problem set", type: "homework", date: "2026-11-12", w: 7, conf: "explicit", hours: 5 },
-  { id: "d6",  course: "MATH 15000", title: "Homework 9 — recurrences", type: "homework", date: "2026-11-24", w: 7, conf: "explicit", hours: 4 },
-  { id: "d4",  course: "MATH 15000", title: "Final exam", type: "exam", date: "2026-12-10", w: 40, conf: "inferred", hours: 15 },
-  // ENGL 22000
-  { id: "e0",  course: "ENGL 22000", title: "Reading response 1", type: "paper", date: "2026-09-11", w: 5, conf: "explicit", hours: 3 },
-  { id: "e1",  course: "ENGL 22000", title: "Essay 1 — close reading", type: "paper", date: "2026-09-25", w: 18, conf: "explicit", hours: 7 },
-  { id: "e2",  course: "ENGL 22000", title: "Essay 2 — comparative", type: "paper", date: "2026-10-30", w: 18, conf: "explicit", hours: 8 },
-  { id: "e3",  course: "ENGL 22000", title: "Essay 3 — research", type: "paper", date: "2026-11-13", w: 19, conf: "explicit", hours: 10 },
-  { id: "e5",  course: "ENGL 22000", title: "Seminar participation", type: "other", date: null, w: 20, conf: "unknown", hours: 0 },
-  { id: "e4",  course: "ENGL 22000", title: "Final portfolio", type: "paper", date: "2026-12-04", w: 20, conf: "explicit", hours: 9 },
-];
-
-// Live data the app actually renders. Starts as the demo semester; a real
-// upload in <Upload> reassigns these, and dataVersion (in <CourseCanvas>)
-// forces everything downstream to re-derive from the new values.
-let COURSES = DEMO_COURSES;
-let ASSESSMENTS = DEMO_ASSESSMENTS;
-
-const DEFAULT_CONSTRAINTS = [
-  { id: "k1", label: "Shift at the bookstore", days: [2, 4], s: 16, e: 21, kind: "work" },
-  { id: "k2", label: "Commute — 7 train", days: [1, 2, 3, 4, 5], s: 8, e: 9, kind: "commute" },
-  { id: "k3", label: "Intramural volleyball", days: [3], s: 19, e: 21, kind: "sport" },
-];
+const DEFAULT_CONSTRAINTS = [];
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const HOURS = Array.from({ length: 15 }, (_, i) => i + 8); // 8:00 → 22:00
@@ -515,31 +386,32 @@ function Login({ onEnter }) {
             Five syllabi.<br />One semester.<br /><span style={{ color: "var(--signal)" }}>One view.</span>
           </h1>
           <p className="lede" style={{ color: "#A9A6B4" }}>
-            Your syllabi each know one course. None of them know that October 14th
-            is the week four of them collide. Upload all of them and see the semester
-            the way it will actually happen to you.
+            Your syllabi each know one course. None of them know when all your
+            assignments, exams, class blocks, and free time collide. Upload the files
+            and see the semester the way it will actually happen to you.
           </p>
 
           {/* mini rail — the signature element, previewed */}
           <div style={{ marginTop: 40 }}>
-            {COURSES.map((c, i) => (
-              <div key={c.code} className="anim-up" style={{ display: "flex", alignItems: "center",
+            {["Syllabus upload", "Calendar blocks", "Study route", "Flashcards"].map((label, i) => (
+              <div key={label} className="anim-up" style={{ display: "flex", alignItems: "center",
                    height: 30, animationDelay: `${i * 90}ms` }}>
-                <Bullet course={c} size="sm" />
+                <span className="nav-tick" style={{ background: ["#D6352B", "#1B54B8", "#F2C14E", "#16904A"][i] }} />
                 <div style={{ position: "relative", flex: 1, height: 3, marginLeft: 10,
-                              background: c.color, opacity: 0.55, borderRadius: 2 }}>
-                  {[18, 44, 62, 88].map((p, j) => (
-                    <span key={j} className="anim-pop" style={{ position: "absolute", left: `${p + i * 3}%`, top: "50%",
+                              background: ["#D6352B", "#1B54B8", "#F2C14E", "#16904A"][i], opacity: 0.55, borderRadius: 2 }}>
+                  {[18, 44, 72].map((p, j) => (
+                    <span key={j} className="anim-pop" style={{ position: "absolute", left: `${p}%`, top: "50%",
                       width: 9, height: 9, borderRadius: "50%", background: "#fff",
                       border: "2px solid var(--ink)", transform: "translate(-50%,-50%)",
                       animationDelay: `${600 + i * 90 + j * 70}ms` }} />
                   ))}
                 </div>
+                <span className="mono tiny" style={{ marginLeft: 10, color: "#A9A6B4" }}>{label}</span>
               </div>
             ))}
             <div className="mono anim-up" style={{ fontSize: 10.5, color: "var(--alert)", marginTop: 12,
                  letterSpacing: ".1em", animationDelay: "1.5s" }}>
-              ▮▮▮ {findCollisions(ASSESSMENTS).filter((c) => c.severity !== "normal").length} SERVICE ADVISORIES DETECTED THIS SEMESTER
+              ▮▮▮ SERVICE ADVISORIES APPEAR AFTER YOUR REAL UPLOAD
             </div>
           </div>
         </div>
@@ -572,10 +444,9 @@ function Login({ onEnter }) {
             </div>
 
             <button className="btn btn-signal" style={{ width: "100%", justifyContent: "center" }}
-              onClick={() => onEnter("demo@myhunter.cuny.edu")}>Enter as demo student</button>
+              onClick={() => onEnter("student@cuny.edu")}>Continue to upload</button>
             <p className="tiny" style={{ marginTop: 12 }}>
-              The demo loads five real Hunter syllabi already parsed, so you can see the
-              whole semester without waiting on an upload.
+              The semester stays blank until you upload real syllabus files.
             </p>
           </div>
         </div>
@@ -586,36 +457,16 @@ function Login({ onEnter }) {
 
 /* ------------------------------- 2. UPLOAD --------------------------------- */
 
-const DEMO_FILES = [
-  { name: "CSCI33500_F26_syllabus.pdf", size: "412 KB", found: "6 assessments · 3 policies · 6 topics" },
-  { name: "CSCI26000_syllabus_v2.pdf", size: "298 KB", found: "5 assessments · 3 policies · 6 topics" },
-  { name: "ECO20100-Okonkwo.pdf", size: "1.1 MB", found: "5 assessments · 3 policies · 6 topics" },
-  { name: "discrete_structures_fall26.docx", size: "88 KB", found: "4 assessments · 3 policies · 6 topics" },
-  { name: "ENGL220_scan.jpg", size: "2.4 MB", found: "4 assessments · 3 policies · 6 topics" },
-];
-
 function Upload({ onDone, semesterStart }) {
   const [files, setFiles] = useState([]);
   const [stage, setStage] = useState("idle"); // idle | parsing | done
   const [drag, setDrag] = useState(false);
-  const [isReal, setIsReal] = useState(false);
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState([]);
   const inputRef = useRef(null);
   const realFilesRef = useRef([]);
 
-  const startDemo = () => {
-    setIsReal(false);
-    setError("");
-    setWarnings([]);
-    COURSES = DEMO_COURSES;
-    ASSESSMENTS = DEMO_ASSESSMENTS;
-    setFiles(DEMO_FILES.map((x) => ({ ...x, pct: 0 })));
-    setStage("parsing");
-  };
-
   const startReal = (fileObjs) => {
-    setIsReal(true);
     setError("");
     setWarnings([]);
     realFilesRef.current = fileObjs;
@@ -628,28 +479,21 @@ function Upload({ onDone, semesterStart }) {
     setStage("parsing");
   };
 
-  // Cosmetic progress ticker. For the demo path it also fires the completion
-  // itself, exactly as before; for a real upload it caps below 100 and waits
-  // for the actual response (next effect) to finish the job.
+  // Cosmetic progress ticker. It caps below 100 until the backend finishes.
   useEffect(() => {
     if (stage !== "parsing") return;
-    const cap = isReal ? 92 : 100;
+    const cap = 92;
     const t = setInterval(() => {
       setFiles((prev) => {
-        const next = prev.map((f, i) => ({ ...f, pct: Math.min(cap, f.pct + (7 + ((i * 3) % 6))) }));
-        if (!isReal && next.every((f) => f.pct >= 100)) {
-          clearInterval(t);
-          setTimeout(() => setStage("done"), 350);
-        }
-        return next;
+        return prev.map((f, i) => ({ ...f, pct: Math.min(cap, f.pct + (7 + ((i * 3) % 6))) }));
       });
     }, 130);
     return () => clearInterval(t);
-  }, [stage, isReal]);
+  }, [stage]);
 
-  // The real Gemini call, only for genuine uploads.
+  // The real Gemini call.
   useEffect(() => {
-    if (stage !== "parsing" || !isReal) return;
+    if (stage !== "parsing") return;
     let cancelled = false;
     askGemini({ files: realFilesRef.current, semesterStart })
       .then((semester) => {
@@ -666,17 +510,16 @@ function Upload({ onDone, semesterStart }) {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err.message || "Parsing failed. Try again with fewer or smaller files.");
+        setError(err.message || "Parsing failed. Try again with fewer or smaller syllabus files.");
         setStage("idle");
         setFiles([]);
       });
     return () => { cancelled = true; };
-  }, [stage, isReal, semesterStart]);
+  }, [stage, semesterStart]);
 
   const pickFiles = (e) => {
     const chosen = Array.from(e.target.files || []);
     if (chosen.length) startReal(chosen);
-    else startDemo();
   };
 
   return (
@@ -700,7 +543,7 @@ function Upload({ onDone, semesterStart }) {
             e.preventDefault();
             setDrag(false);
             const dropped = Array.from(e.dataTransfer.files || []);
-            dropped.length ? startReal(dropped) : startDemo();
+            if (dropped.length) startReal(dropped);
           }}
           onClick={() => stage === "idle" && inputRef.current?.click()}
           style={{ border: `2px dashed ${drag ? "var(--signal)" : "var(--bone3)"}`, borderRadius: 8,
@@ -713,13 +556,9 @@ function Upload({ onDone, semesterStart }) {
           <p className="tiny" style={{ marginBottom: 16 }}>
             {stage === "parsing"
               ? "Gemini is reading all of them in a single context window."
-              : "Or click to browse. Nothing leaves your session."}
+              : "Or click to browse. PDFs, Word docs, images, and text files work."}
           </p>
-          {stage === "idle" && (
-            <button className="btn btn-signal" onClick={(e) => { e.stopPropagation(); startDemo(); }}>
-              Use five sample syllabi
-            </button>
-          )}
+          {stage === "idle" && <span className="chip chip-warn">REAL SYLLABUS FILES REQUIRED</span>}
         </div>
       )}
 
@@ -764,17 +603,13 @@ function Upload({ onDone, semesterStart }) {
             <Stat n={findCollisions(ASSESSMENTS).filter((c) => c.severity !== "normal").length}
                   label="Collision weeks" tone="var(--alert)" />
           </div>
-          {isReal && warnings.length > 0 ? (
+          {warnings.length > 0 ? (
             <ul className="tiny" style={{ color: "#A9A6B4", marginBottom: 18, maxWidth: "60ch", paddingLeft: 18 }}>
               {warnings.map((w, i) => <li key={i} style={{ marginBottom: 4 }}>{w}</li>)}
             </ul>
           ) : (
             <p className="tiny" style={{ color: "#A9A6B4", marginBottom: 18, maxWidth: "60ch" }}>
-              {isReal
-                ? "Structured output guarantees the shape of every field, never the truth of it — check any flagged dates on the canvas."
-                : `Six dates were written as "TBA" or "week 12" rather than a calendar date. Those are
-                   flagged rather than guessed at — you will see a hollow marker on the canvas wherever
-                   we are not certain.`}
+              Structured output guarantees the shape of every field, never the truth of it — check any flagged dates on the canvas.
             </p>
           )}
           <button className="btn btn-signal" onClick={onDone}>Open the semester canvas →</button>
@@ -905,14 +740,14 @@ function CanvasView({ today, onExport, onPanic }) {
   const [sel, setSel] = useState(null);
   const collisions = useMemo(() => findCollisions(ASSESSMENTS), []);
   const hot = collisions.filter((c) => c.severity !== "normal");
-  const worst = collisions.reduce((a, b) => (b.share > a.share ? b : a), collisions[0]);
+  const worst = collisions.length ? collisions.reduce((a, b) => (b.share > a.share ? b : a), collisions[0]) : null;
   const totalHours = ASSESSMENTS.reduce((s, a) => s + (a.date ? a.hours : 0), 0);
 
   return (
     <div>
       <div className="head">
         <div>
-          <div className="eyebrow">Fall 2026 · 5 courses · 16 weeks</div>
+          <div className="eyebrow">Fall 2026 · {COURSES.length} course{COURSES.length === 1 ? "" : "s"} · 16 weeks</div>
           <h2 className="d2" style={{ margin: "8px 0 6px" }}>The semester canvas</h2>
           <p className="lede">
             Each line is a course. Each station is something you are graded on, sized by how
@@ -926,7 +761,7 @@ function CanvasView({ today, onExport, onPanic }) {
       <div className="card" style={{ display: "flex", gap: 36, flexWrap: "wrap", marginBottom: 18 }}>
         <Stat n={ASSESSMENTS.filter((a) => a.date).length} label="Graded events" />
         <Stat n={hot.length} label="Collision weeks" tone="var(--alert)" />
-        <Stat n={`Wk ${worst.week}`} label="Heaviest week" tone="var(--alert)" />
+        <Stat n={worst ? `Wk ${worst.week}` : "—"} label="Heaviest week" tone="var(--alert)" />
         <Stat n={`${totalHours}h`} label="Prep hours ahead" />
         <Stat n={ASSESSMENTS.filter((a) => a.conf !== "explicit").length} label="Uncertain dates" tone="#8A6510" />
       </div>
@@ -945,6 +780,7 @@ function CanvasView({ today, onExport, onPanic }) {
 
       {sel && (() => {
         const c = courseBy(sel.course);
+        if (!c) return null;
         return (
           <div className="card anim-up" style={{ marginBottom: 18, borderLeft: `4px solid ${c.color}` }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
@@ -986,6 +822,9 @@ function CanvasView({ today, onExport, onPanic }) {
           <p className="tiny" style={{ margin: "8px 0 16px" }}>
             Weeks where enough of your grade lands at once that no single syllabus warned you.
           </p>
+          {hot.length === 0 && (
+            <Empty title="No advisories yet" body="Once dated assignments or exams overlap, this area will flag the weeks that need extra planning." />
+          )}
           {hot.map((c) => (
             <div key={c.week} style={{ marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
@@ -998,7 +837,7 @@ function CanvasView({ today, onExport, onPanic }) {
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 7 }}>
                 {c.list.map((a) => (
-                  <span key={a.id} className="chip" style={{ borderColor: courseBy(a.course).color }}>
+                  <span key={a.id} className="chip" style={{ borderColor: courseBy(a.course)?.color || "var(--bone3)" }}>
                     <Bullet course={a.course} size="sm" /> {TYPE_GLYPH[a.type]} · {a.w}%
                   </span>
                 ))}
@@ -1023,11 +862,17 @@ function CanvasView({ today, onExport, onPanic }) {
           <hr className="rule" />
           <div className="card-flat">
             <div className="eyebrow" style={{ marginBottom: 6 }}>The one thing to know</div>
-            <p style={{ fontSize: 14.5, lineHeight: 1.5, margin: 0 }}>
-              <strong>Week {worst.week}</strong> decides <strong>{worst.share}%</strong> of your
-              whole semester across {worst.courses} courses, in {worst.exams} exams. Everything
-              before it is preparation for it, whether you plan that way or not.
-            </p>
+            {worst ? (
+              <p style={{ fontSize: 14.5, lineHeight: 1.5, margin: 0 }}>
+                <strong>Week {worst.week}</strong> decides <strong>{worst.share}%</strong> of your
+                whole semester across {worst.courses} courses, in {worst.exams} exams. Everything
+                before it is preparation for it, whether you plan that way or not.
+              </p>
+            ) : (
+              <p style={{ fontSize: 14.5, lineHeight: 1.5, margin: 0 }}>
+                No dated grading events were found yet. Upload another syllabus or check the file if this seems wrong.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -1386,6 +1231,9 @@ function Flashcards({ cards, color }) {
   const [i, setI] = useState(0);
   const [flip, setFlip] = useState(false);
   const [known, setKnown] = useState([]);
+  if (!cards.length) {
+    return <Empty title="No flashcards yet" body="Upload notes, slides, or a syllabus with topics before flashcards are generated." />;
+  }
   const card = cards[i % cards.length];
   const next = (got) => {
     setKnown((p) => (got ? [...new Set([...p, card.q])] : p.filter((x) => x !== card.q)));
@@ -1424,9 +1272,9 @@ function Flashcards({ cards, color }) {
 }
 
 function makeCards(course) {
-  return course.topics.map((t) => ({
+  return (course?.topics || []).map((t) => ({
     q: t,
-    a: course.topicDefs?.[t] || GENERATED_DEFS[t] || `Gemini writes this definition from the material you upload for ${course.code}.`,
+    a: course.topicDefs?.[t] || GENERATED_DEFS[t] || `Definition will come from uploaded notes for ${course.code}.`,
   }));
 }
 
@@ -1471,11 +1319,15 @@ function Quiz({ course, cards }) {
     const own = cards.map((c) => [c.q, c.a]);
     return own.length > 4 ? own : [...own, ...Object.entries(GENERATED_DEFS)];
   }, [cards]);
-  const q = cards[qi % cards.length];
+  const q = cards[qi % cards.length] || { q: "", a: "" };
   const options = useMemo(() => {
     const wrong = pool.filter(([k]) => k !== q.q).sort(() => Math.random() - 0.5).slice(0, 3).map(([, v]) => v);
     return [q.a, ...wrong].sort(() => Math.random() - 0.5);
   }, [qi, q.q, q.a, pool]);
+
+  if (!cards.length) {
+    return <Empty title="No quiz yet" body="Generate flashcards from your uploaded notes first, then the quiz can use those cards." />;
+  }
 
   return (
     <div>
@@ -1512,6 +1364,10 @@ function CourseVault({ course, today }) {
   const [tab, setTab] = useState("overview");
   const [material, setMaterial] = useState([]);
   const [gen, setGen] = useState(false);
+  const materialRef = useRef(null);
+  if (!course) {
+    return <Empty title="Pick a course" body="Choose one of your uploaded courses to see policies, deadlines, and study tools." />;
+  }
   const items = ASSESSMENTS.filter((a) => a.course === course.code);
   const upcoming = items.filter((a) => !a.date || parseISO(a.date) >= today);
   const cards = useMemo(() => makeCards(course), [course.code]);
@@ -1607,10 +1463,16 @@ function CourseVault({ course, today }) {
               Lecture slides, your notes, the review sheet, a photo of the whiteboard. Gemini reads
               them alongside the syllabus so the study tools match what {course.instructor.split(" ")[1]} actually tests.
             </p>
+            <input ref={materialRef} type="file" multiple hidden accept=".pdf,.docx,.png,.jpg,.jpeg,.txt,.md"
+              onChange={(e) => {
+                const picked = Array.from(e.target.files || []).map((file) => ({
+                  name: file.name,
+                  n: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+                }));
+                setMaterial((p) => [...p, ...picked]);
+              }} />
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button className="btn btn-primary" onClick={() => {
-                setMaterial((p) => [...p, { name: `lecture_${p.length + 8}_slides.pdf`, n: 24 + p.length * 3 }]);
-              }}>Add material</button>
+              <button className="btn btn-primary" onClick={() => materialRef.current?.click()}>Upload notes PDF</button>
               {material.length > 0 && (
                 <button className="btn btn-signal" onClick={() => { setGen(true); setTimeout(() => setTab("cards"), 900); }}>
                   {gen ? "Generating…" : "Generate study tools"}
@@ -1626,7 +1488,7 @@ function CourseVault({ course, today }) {
                 <div key={i} className="card anim-up" style={{ padding: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
                     <div className="mono" style={{ fontSize: 12.5, fontWeight: 600 }}>{m.name}</div>
-                    <div className="tiny">{m.n} slides · {course.topics.length} concepts recognised</div>
+                    <div className="tiny">{m.n} · ready for study-tool generation</div>
                   </div>
                   <span className="chip chip-go">INDEXED</span>
                 </div>
@@ -1797,14 +1659,14 @@ function normalizeSemester(semester) {
     return {
       code: c.code,
       short: shortFromCode(c.code),
-      title: c.title,
-      instructor: c.instructor || "Instructor TBA",
+      title: c.title || c.code || "Untitled course",
+      instructor: c.instructor || "Instructor not found in syllabus",
       color: PALETTE[i % PALETTE.length],
       meets: parseMeetingTimes(c.meetingTimes || ""),
-      room: c.room || "Room TBA",
-      late: c.latePolicy || "No late policy specified in the syllabus.",
-      attendance: c.attendancePolicy || "No attendance policy specified in the syllabus.",
-      grading: (c.gradingPolicy || []).map((g) => ({ cat: g.category, w: g.weightPercent || 0, drops: !!g.dropsLowest })),
+      room: c.room || "Room not found in syllabus",
+      late: c.latePolicy || "No late policy found in the syllabus.",
+      attendance: c.attendancePolicy || "No attendance policy found in the syllabus.",
+      grading: (c.gradingPolicy || []).map((g) => ({ cat: g.category || "Unlabeled grading item", w: g.weightPercent ?? 0, drops: !!g.dropsLowest })),
       topics: c.topics || [],
       topicDefs,
     };
@@ -1824,6 +1686,131 @@ function normalizeSemester(semester) {
   return { courses, assessments };
 }
 
+function NeedUpload({ onUpload }) {
+  return (
+    <Empty
+      title="Upload a syllabus first"
+      body="Canvas, Courses, Planner, Flashcards, and Quiz stay locked until Gemini successfully reads a real syllabus file."
+      action={<button className="btn btn-signal" onClick={onUpload}>Go to syllabus upload</button>}
+    />
+  );
+}
+
+function CoursesPage({ courseCode, setCourseCode, today }) {
+  const course = courseBy(courseCode) || COURSES[0];
+  return (
+    <div>
+      <div className="head">
+        <div>
+          <div className="eyebrow">Semester / Courses</div>
+          <h2 className="d2" style={{ margin: "8px 0 6px" }}>Your uploaded courses</h2>
+          <p className="lede">Every card here comes from the syllabus files you uploaded.</p>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
+        {COURSES.map((c) => (
+          <button key={c.code} className="chip" onClick={() => setCourseCode(c.code)}
+            style={{ background: course?.code === c.code ? c.color : "#fff", color: course?.code === c.code ? "#fff" : "var(--ink)",
+                     borderColor: course?.code === c.code ? c.color : "var(--bone3)" }}>
+            {c.code}
+          </button>
+        ))}
+      </div>
+      <CourseVault course={course} today={today} />
+    </div>
+  );
+}
+
+function PlannerPage(props) {
+  return (
+    <div>
+      <div className="head">
+        <div>
+          <div className="eyebrow">Semester / Planner</div>
+          <h2 className="d2" style={{ margin: "8px 0 6px" }}>My week, availability, and study route</h2>
+          <p className="lede">Class blocks come from your syllabi. Personal time, commute buffers, and study blocks come from your choices.</p>
+        </div>
+      </div>
+      <Availability {...props.availabilityProps} />
+      <div style={{ height: 22 }} />
+      <Plan {...props.planProps} />
+    </div>
+  );
+}
+
+function StudyPage({ mode, courseCode, setCourseCode, notes, setNotes }) {
+  const inputRef = useRef(null);
+  const course = courseBy(courseCode) || COURSES[0];
+  const cards = notes.length && course ? makeCards(course) : [];
+
+  return (
+    <div>
+      <div className="head">
+        <div>
+          <div className="eyebrow">Study / {mode}</div>
+          <h2 className="d2" style={{ margin: "8px 0 6px" }}>
+            {mode === "notes" ? "Upload notes from iPad or computer" : mode === "flashcards" ? "Flashcards from your notes" : "Quiz from your flashcards"}
+          </h2>
+          <p className="lede">Pick a real uploaded course, then add your notes PDFs, images, or documents.</p>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 18 }}>
+        <div className="eyebrow" style={{ marginBottom: 10 }}>Course</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {COURSES.map((c) => (
+            <button key={c.code} className="chip" onClick={() => setCourseCode(c.code)}
+              style={{ background: course?.code === c.code ? c.color : "#fff", color: course?.code === c.code ? "#fff" : "var(--ink)",
+                       borderColor: course?.code === c.code ? c.color : "var(--bone3)" }}>
+              {c.code}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {mode === "notes" && (
+        <div className="card">
+          <input ref={inputRef} type="file" multiple hidden accept=".pdf,.docx,.png,.jpg,.jpeg,.txt,.md"
+            onChange={(e) => {
+              const picked = Array.from(e.target.files || []).map((file) => ({
+                name: file.name,
+                size: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+              }));
+              setNotes((p) => [...p, ...picked]);
+            }} />
+          <div className="eyebrow">Notes input</div>
+          <p className="lede" style={{ fontSize: 14.5, margin: "8px 0 16px" }}>
+            Upload PDFs, screenshots, Word docs, or text notes. No sample notes are loaded for you.
+          </p>
+          <button className="btn btn-primary" onClick={() => inputRef.current?.click()}>Upload notes file</button>
+          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+            {notes.length === 0 ? (
+              <Empty title="No notes uploaded" body="Add a real notes file to unlock flashcards and quiz mode." />
+            ) : notes.map((note, i) => (
+              <div key={note.name + i} className="card-flat" style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <span className="mono tiny">{note.name}</span>
+                <span className="chip chip-go">{note.size}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {mode === "flashcards" && (
+        <div style={{ maxWidth: 600 }}>
+          <Flashcards cards={cards} color={course?.color || "var(--ink)"} />
+        </div>
+      )}
+
+      {mode === "quiz" && (
+        <div style={{ maxWidth: 640 }} className="card">
+          <Quiz course={course} cards={cards} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* --------------------------------- APP ------------------------------------ */
 
 export default function CourseCanvas() {
@@ -1837,9 +1824,9 @@ export default function CourseCanvas() {
   const [commuteBuffer, setCommuteBuffer] = useState(1);
   const [panicId, setPanicId] = useState(null);
   const [ics, setIcs] = useState(null);
-  // Bumped whenever Upload reassigns the module-level COURSES/ASSESSMENTS
-  // (real parse or a reset to the demo semester), so memoized derivations
-  // below re-run and every view under <main> gets a fresh mount.
+  const [notes, setNotes] = useState([]);
+  // Bumped whenever Upload reassigns the module-level COURSES/ASSESSMENTS, so
+  // memoized derivations below re-run and every view under <main> gets a fresh mount.
   const [dataVersion, setDataVersion] = useState(0);
 
   const today = useMemo(() => {
@@ -1865,10 +1852,11 @@ export default function CourseCanvas() {
   };
 
   if (!user) return <Login onEnter={(e) => { setUser(e); setView("upload"); }} />;
+  const hasSemester = COURSES.length > 0;
 
   const NAV = [
-    ["Semester", [["canvas", "Canvas"], ["upload", "Syllabi"], ["policies", "Policies"]]],
-    ["Planning", [["availability", "Availability"], ["plan", "Study plan"]]],
+    ["Semester", [["upload", "Syllabus"], ["canvas", "Canvas"], ["courses", "Courses"], ["planner", "Planner"]]],
+    ["Study", [["notes", "Notes"], ["flashcards", "Flashcards"], ["quiz", "Quiz"]]],
   ];
 
   return (
@@ -1886,14 +1874,14 @@ export default function CourseCanvas() {
               <div className="nav-label">{label}</div>
               {items.map(([k, l]) => (
                 <button key={k} className="nav-item" data-on={view === k ? "1" : "0"}
-                  onClick={() => { setView(k); setCourseCode(null); }}>
+                  onClick={() => { setView(k === "upload" || hasSemester ? k : "upload"); if (k !== "courses") setCourseCode(null); }}>
                   <span className="nav-tick" />{l}
                 </button>
               ))}
             </div>
           ))}
 
-          <div className="nav-group">
+          {hasSemester && <div className="nav-group">
             <div className="nav-label">Courses</div>
             {COURSES.map((c) => (
               <button key={c.code} className="nav-item"
@@ -1905,7 +1893,7 @@ export default function CourseCanvas() {
                 </span>
               </button>
             ))}
-          </div>
+          </div>}
 
           <div className="nav-foot">
             <div className="mono" style={{ fontSize: 10.5, color: "#7E7C8E", marginBottom: 3 }}>SIGNED IN</div>
@@ -1924,19 +1912,31 @@ export default function CourseCanvas() {
             />
           )}
           {view === "canvas" && (
-            <CanvasView today={today} onExport={exportICS}
-              onPanic={(id) => { setPanicId(id); setView("plan"); }} />
+            hasSemester ? (
+              <CanvasView today={today} onExport={exportICS}
+                onPanic={(id) => { setPanicId(id); setView("planner"); }} />
+            ) : <NeedUpload onUpload={() => setView("upload")} />
           )}
-          {view === "policies" && <Policies />}
-          {view === "availability" && (
-            <Availability {...{ extraBusy, setExtraBusy, constraints, setConstraints, daysOff, setDaysOff,
-              maxPerDay, setMaxPerDay, commuteBuffer, setCommuteBuffer }} onBuild={() => setView("plan")} />
+          {view === "courses" && (
+            hasSemester ? <CoursesPage courseCode={courseCode} setCourseCode={setCourseCode} today={today} />
+              : <NeedUpload onUpload={() => setView("upload")} />
           )}
-          {view === "plan" && (
-            <Plan plan={plan} panicId={panicId} onClearPanic={() => setPanicId(null)}
-              onExport={exportICS} today={today} maxPerDay={maxPerDay} />
+          {view === "planner" && (
+            hasSemester ? (
+              <PlannerPage
+                availabilityProps={{ extraBusy, setExtraBusy, constraints, setConstraints, daysOff, setDaysOff,
+                  maxPerDay, setMaxPerDay, commuteBuffer, setCommuteBuffer, onBuild: () => setView("planner") }}
+                planProps={{ plan, panicId, onClearPanic: () => setPanicId(null), onExport: exportICS, today, maxPerDay }}
+              />
+            ) : <NeedUpload onUpload={() => setView("upload")} />
           )}
-          {view === "course" && <CourseVault course={courseBy(courseCode)} today={today} />}
+          {["notes", "flashcards", "quiz"].includes(view) && (
+            hasSemester ? (
+              <StudyPage mode={view} courseCode={courseCode} setCourseCode={setCourseCode}
+                notes={notes} setNotes={setNotes} />
+            ) : <NeedUpload onUpload={() => setView("upload")} />
+          )}
+          {view === "course" && (hasSemester ? <CourseVault course={courseBy(courseCode)} today={today} /> : <NeedUpload onUpload={() => setView("upload")} />)}
         </main>
       </div>
 
